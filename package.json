@@ -1,0 +1,30 @@
+{
+  "name": "knowledge-graph-chat-system",
+  "version": "1.0.0",
+  "description": "Knowledge Graph based Chat System with Vue.js frontend and Flask backend",
+  "scripts": {
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "start": "npm run dev",
+    "backend": "cd server && python3 main.py",
+    "frontend": "cd chat-kg && npm run dev",
+    "frontend-server": "cd chat-kg && npm run server",
+    "dev-remote": "concurrently \"npm run backend\" \"npm run frontend-server\"",
+    "install-frontend": "cd chat-kg && npm install",
+    "install-all": "npm install && npm run install-frontend",
+    "build-frontend": "cd chat-kg && npm run build",
+    "build-kg": "python3 main.py --project project_v1",
+    "setup": "npm run install-all && npm run build-kg"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "knowledge-graph",
+    "vue",
+    "flask",
+    "nlp",
+    "chatbot"
+  ],
+  "author": "Knowledge Graph Team",
+  "license": "MIT"
+}

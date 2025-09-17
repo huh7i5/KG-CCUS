@@ -4,11 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "start": "vite",
     "server": "vite serve --host",
+    "serve": "vite serve --host",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore",
-    "format": "prettier --write src/"
+    "format": "prettier --write src/",
+    "dev-with-backend": "cd .. && npm run dev"
   },
   "dependencies": {
     "@ant-design/icons-vue": "^6.1.0",

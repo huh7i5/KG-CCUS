@@ -2,9 +2,9 @@ import os
 import json
 import random
 import subprocess
-from prepare.filter import auto_filter
-from prepare.utils import refine_knowledge_graph
-from prepare import cprint as ct
+from modules.prepare.filter import auto_filter
+from modules.prepare.utils import refine_knowledge_graph
+from modules.prepare import cprint as ct
 
 
 class ModelTrainer:

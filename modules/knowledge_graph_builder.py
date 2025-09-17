@@ -1,14 +1,14 @@
 import os
 import json
 import time
-from prepare.preprocess import process_text
-from prepare.utils import refine_knowledge_graph
-from prepare.process import uie_execute
-from prepare.filter import auto_filter
+from modules.prepare.preprocess import process_text
+from modules.prepare.utils import refine_knowledge_graph
+from modules.prepare.process import uie_execute
+from modules.prepare.filter import auto_filter
 
 from modules.model_trainer import ModelTrainer
 
-from prepare import cprint as ct
+from modules.prepare import cprint as ct
 
 class KnowledgeGraphBuilder:
 

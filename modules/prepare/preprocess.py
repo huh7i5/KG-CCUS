@@ -6,7 +6,7 @@ def clean_to_sentence(file_path):
     with open(file_path, 'r', encoding='utf-8') as f_in:
         dirty_text = f_in.read()
     # 保留中文、英文、数字、字母、标点符号，替换换行符为分号，将繁体转换为简体
-    pattern = re.compile('[^\u4e00-\u9fa5a-zA-Z0-9\s，。？！、‘’；《》【】（）：\-/“”\n\t]')
+    pattern = re.compile(r'[^\u4e00-\u9fa5a-zA-Z0-9\s，。？！、''；《》【】（）：\-/""\n\t]')
     clean_text = pattern.sub('', dirty_text)
     # clean_text = clean_text.replace('\n', '；')
     clean_text = convert(clean_text, 'zh-cn')

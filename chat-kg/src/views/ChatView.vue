@@ -42,8 +42,46 @@
         <img v-for="(img, index) in info.image" :key="index" :src="img" class="info-image" alt="">
       </div>
 
+      <!-- 关联图谱可视化 -->
       <p v-show="info.graph?.nodes?.length > 0"><b>关联图谱</b></p>
-      <div id="lite_graph" v-show="info.graph?.nodes?.length > 0"></div>
+      <div id="lite_graph" v-show="info.graph?.nodes?.length > 0" @click="handleGraphClick"></div>
+
+      <!-- 实体详细信息 -->
+      <div v-if="selectedEntity" class="entity-details">
+        <h3>{{ selectedEntity.name }}</h3>
+        <p><strong>关系数量:</strong> {{ selectedEntity.total_connections }}</p>
+        <div v-if="selectedEntity.relationships.length > 0">
+          <h4>相关关系:</h4>
+          <ul>
+            <li v-for="(rel, index) in selectedEntity.relationships.slice(0, 5)" :key="index">
+              <span v-if="rel.type === 'outgoing'">{{ selectedEntity.name }} → {{ rel.relation }} → {{ rel.target }}</span>
+              <span v-else>{{ rel.source }} → {{ rel.relation }} → {{ selectedEntity.name }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 建议问题 -->
+      <div v-if="suggestions && suggestions.length > 0" class="suggestions">
+        <h4>💡 相关问题推荐:</h4>
+        <div v-for="(suggestion, index) in suggestions" :key="index" class="suggestion-item" @click="askSuggestion(suggestion)">
+          {{ suggestion }}
+        </div>
+      </div>
+
+      <!-- 对话摘要 -->
+      <div v-if="conversationSummary" class="conversation-summary">
+        <h4>📊 对话摘要:</h4>
+        <p>已讨论 {{ conversationSummary.total_entities }} 个实体</p>
+        <div v-if="conversationSummary.most_discussed && conversationSummary.most_discussed.length > 0">
+          <strong>热门话题:</strong>
+          <span v-for="(item, index) in conversationSummary.most_discussed" :key="index" class="topic-tag">
+            {{ item[0] }} ({{ item[1] }}次)
+          </span>
+        </div>
+      </div>
+
+      <!-- 相关描述 -->
       <a-collapse v-model:activeKey="state.activeKey" v-if="info.graph?.sents?.length > 0" accordion>
         <a-collapse-panel
           v-for="(sent, index) in info.graph.sents"
@@ -89,6 +127,11 @@ const default_info = {
 const info = reactive({
   ...default_info
 })
+
+// 新增响应式数据
+const selectedEntity = ref(null)
+const suggestions = ref([])
+const conversationSummary = ref(null)
 
 const scrollToBottom = () => {
   setTimeout(() => {
@@ -158,16 +201,23 @@ const sendMessage = () => {
         return reader.read().then(({ done, value }) => {
           if (done) {
             console.log('Finished')
-            return
-          }
+            // 处理完成时的最终更新
+            if (pic) info.image = pic
+            if (graph) info.graph = graph
+            if (wiki?.title) info.title = wiki.title
+            if (wiki?.summary) info.description = wiki.summary
 
-          info.image = pic
-          info.graph = graph
-          // 处理维基百科的内容
-          info.title = wiki?.title
-          info.description = wiki?.summary
-          if (info.graph && info.graph.nodes) {
-            myChart.setOption(graphOption(info.graph));
+            // 确保图表在DOM准备好后初始化
+            if (info.graph && info.graph.nodes && myChart) {
+              setTimeout(() => {
+                try {
+                  myChart.setOption(graphOption(info.graph));
+                } catch (e) {
+                  console.error('ECharts rendering error:', e);
+                }
+              }, 100);
+            }
+            return
           }
 
           buffer += decoder.decode(value, { stream: true })
@@ -175,15 +225,27 @@ const sendMessage = () => {
           const message = buffer.trim().split('\n').pop()
           // 尝试解析 message
           try {
-            const data = JSON.parse(message)
-            updateLastReceivedMessage(data.updates.response, cur_res_id)
-            state.history = data.history
-            pic = data.image
-            wiki = data.wiki
-            graph = data.graph
+            const parsedData = JSON.parse(message)
+            updateLastReceivedMessage(parsedData.updates.response, cur_res_id)
+            state.history = parsedData.history
+            pic = parsedData.image
+            wiki = parsedData.wiki
+            graph = parsedData.graph
+
+            // 更新新增数据
+            if (parsedData.entity_details) {
+              selectedEntity.value = parsedData.entity_details[0] || null
+            }
+            if (parsedData.suggestions) {
+              suggestions.value = parsedData.suggestions
+            }
+            if (parsedData.conversation_summary) {
+              conversationSummary.value = parsedData.conversation_summary
+            }
+
             buffer = ''
           } catch (e) {
-            console.log(e)
+            console.log('JSON parse error:', e)
           }
 
           return readChunk()
@@ -199,25 +261,34 @@ const sendMessage = () => {
 const graphOption = (graph) => {
   console.log(graph)
   graph.nodes.forEach(node => {
-    node.symbolSize = 5;
+    node.symbolSize = 8;
     node.label = {
-      show: true
+      show: true,
+      fontSize: 10
     }
   });
   let option = {
     tooltip: {
-      show: true, //默认值为true
-      showContent: true, //是否显示提示框浮层
-      trigger: 'item', //触发类型，默认数据项触发
-      triggerOn: 'mousemove', //提示触发条件，mousemove鼠标移至触发，还有click点击触发
-      alwaysShowContent: false, //默认离开提示框区域隐藏，true为一直显示
-      showDelay: 0, //浮层显示的延迟，单位为 ms，默认没有延迟，也不建议设置。在 triggerOn 为 'mousemove' 时有效。
-      hideDelay: 200, //浮层隐藏的延迟，单位为 ms，在 alwaysShowContent 为 true 的时候无效。
-      enterable: false, //鼠标是否可进入提示框浮层中，默认为false，如需详情内交互，如添加链接，按钮，可设置为 true。
-      position: 'right', //提示框浮层的位置，默认不设置时位置会跟随鼠标的位置。只在 trigger 为'item'的时候有效。
-      confine: false, //是否将 tooltip 框限制在图表的区域内。外层的 dom 被设置为 'overflow: hidden'，或者移动端窄屏，导致 tooltip 超出外界被截断时，此配置比较有用。
-      // transitionDuration: 0.1, //提示框浮层的移动动画过渡时间，单位是 s，设置为 0 的时候会紧跟着鼠标移动。
-      formatter: (x) => x.data.name
+      show: true,
+      showContent: true,
+      trigger: 'item',
+      triggerOn: 'mousemove',
+      alwaysShowContent: false,
+      showDelay: 0,
+      hideDelay: 200,
+      enterable: false,
+      position: 'right',
+      confine: false,
+      formatter: (params) => {
+        if (params.dataType === 'node') {
+          return `<strong>${params.data.name}</strong><br/>点击查看详细信息`
+        } else if (params.dataType === 'edge') {
+          const sourceNode = graph.nodes[params.data.source]
+          const targetNode = graph.nodes[params.data.target]
+          return `${sourceNode.name} → ${params.data.name} → ${targetNode.name}`
+        }
+        return params.data.name
+      }
     },
     series: [
       {
@@ -232,20 +303,77 @@ const graphOption = (graph) => {
         categories: graph.categories,
         roam: true,
         label: {
-          position: 'right'
+          position: 'right',
+          fontSize: 10
         },
         force: {
-          repulsion: 100
+          repulsion: 120,
+          gravity: 0.1,
+          edgeLength: 30
         },
         lineStyle: {
           color: 'source',
-          curveness: 0.1
+          curveness: 0.2,
+          width: 1
         },
+        itemStyle: {
+          borderColor: '#fff',
+          borderWidth: 1
+        },
+        emphasis: {
+          focus: 'adjacency',
+          lineStyle: {
+            width: 3
+          },
+          itemStyle: {
+            shadowBlur: 10,
+            shadowColor: 'rgba(0, 0, 0, 0.3)'
+          }
+        }
       }
     ]
   };
 
   return option
+}
+
+// 处理图谱点击事件
+const handleGraphClick = (event) => {
+  if (myChart) {
+    myChart.on('click', (params) => {
+      if (params.dataType === 'node') {
+        console.log('点击节点:', params.data.name)
+        // 查找对应的实体详情
+        const entityName = params.data.name
+        fetchEntityDetails(entityName)
+      }
+    })
+  }
+}
+
+// 获取实体详细信息
+const fetchEntityDetails = async (entityName) => {
+  try {
+    // 这里可以发送请求获取实体详情，或从现有数据中查找
+    console.log('获取实体详情:', entityName)
+    // 暂时模拟数据
+    selectedEntity.value = {
+      name: entityName,
+      total_connections: 5,
+      relationships: [
+        { type: 'outgoing', relation: '包含', target: '相关实体1' },
+        { type: 'incoming', relation: '属于', source: '相关实体2' }
+      ]
+    }
+  } catch (error) {
+    console.error('获取实体详情失败:', error)
+  }
+}
+
+// 处理建议问题点击
+const askSuggestion = (suggestion) => {
+  state.inputText = suggestion
+  sendMessage()
 }
 
 
@@ -268,8 +396,45 @@ const clearChat = () => {
 
 onMounted(() => {
   sendDeafultMessage()
-  myChart = echarts.init(document.getElementById('lite_graph'));
 
+  // 等待DOM完全渲染后初始化ECharts
+  setTimeout(() => {
+    const chartDom = document.getElementById('lite_graph');
+    if (chartDom && chartDom.clientWidth > 0 && chartDom.clientHeight > 0) {
+      try {
+        myChart = echarts.init(chartDom);
+        // 绑定图谱点击事件
+        handleGraphClick()
+        console.log('ECharts initialized successfully');
+
+        // 监听窗口大小变化
+        window.addEventListener('resize', () => {
+          if (myChart) {
+            myChart.resize();
+          }
+        });
+      } catch (e) {
+        console.error('ECharts initialization error:', e);
+      }
+    } else {
+      console.warn('Chart container not ready, retrying...');
+      // 如果DOM还没准备好，再等待一下
+      setTimeout(() => {
+        const retryDom = document.getElementById('lite_graph');
+        if (retryDom && retryDom.clientWidth > 0 && retryDom.clientHeight > 0) {
+          myChart = echarts.init(retryDom);
+          handleGraphClick()
+
+          // 监听窗口大小变化
+          window.addEventListener('resize', () => {
+            if (myChart) {
+              myChart.resize();
+            }
+          });
+        }
+      }, 500);
+    }
+  }, 200);
 })
 </script>
 
@@ -429,14 +594,106 @@ div.info {
   }
 
   #lite_graph {
-    width: 400px;
-    height: 300px;
+    width: 400px !important;
+    height: 300px !important;
+    min-width: 400px;
+    min-height: 300px;
     background: #f5f5f5;
     // border: 4px solid #ccc;
     border-radius: 8px;
+    display: block;
     margin-bottom: 1rem;
     box-shadow: 0px 0.3px 0.9px rgba(0, 0, 0, 0.12), 0px 0.6px 2.3px rgba(0, 0, 0, 0.1),
       0px 1px 5px rgba(0, 0, 0, 0.08);
+  }
+
+  // 新增样式
+  .entity-details {
+    background: #f9f9f9;
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    border-left: 4px solid #40788c;
+
+    h3 {
+      margin: 0 0 8px 0;
+      color: #333;
+      font-size: 16px;
+    }
+
+    h4 {
+      margin: 12px 0 6px 0;
+      color: #555;
+      font-size: 14px;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 16px;
+
+      li {
+        margin-bottom: 4px;
+        font-size: 12px;
+        color: #666;
+      }
+    }
+  }
+
+  .suggestions {
+    margin-bottom: 16px;
+
+    h4 {
+      margin: 0 0 8px 0;
+      color: #333;
+      font-size: 14px;
+    }
+
+    .suggestion-item {
+      background: #e6f7ff;
+      padding: 8px 12px;
+      margin-bottom: 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #1890ff;
+      border: 1px solid #b3e0ff;
+      transition: all 0.2s;
+
+      &:hover {
+        background: #bae7ff;
+        transform: translateX(2px);
+      }
+    }
+  }
+
+  .conversation-summary {
+    background: #f6ffed;
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    border-left: 4px solid #52c41a;
+
+    h4 {
+      margin: 0 0 8px 0;
+      color: #333;
+      font-size: 14px;
+    }
+
+    p {
+      margin: 0 0 8px 0;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .topic-tag {
+      display: inline-block;
+      background: #d4edda;
+      padding: 2px 6px;
+      margin: 2px 4px 2px 0;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #155724;
+    }
   }
 }
 </style>

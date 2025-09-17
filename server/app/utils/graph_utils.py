@@ -59,6 +59,7 @@ def search_node_item(user_input, lite_graph=None):
 
 
 def convert_graph_to_triples(graph, entity=None):
+    """将图谱转换为三元组格式，并添加相关句子信息"""
     triples = []
     for link in graph['links']:
         source = graph['nodes'][link['source']]
@@ -66,8 +67,75 @@ def convert_graph_to_triples(graph, entity=None):
 
         if entity is not None:
             if entity in source['name'] or entity in target['name']:
-                triples.append((source['name'], link["name"], target['name']))
+                triple = (source['name'], link["name"], target['name'])
+                triples.append(triple)
         else:
-            triples.append((source['name'], link["name"], target['name']))
+            triple = (source['name'], link["name"], target['name'])
+            triples.append(triple)
 
     return triples
+
+def extract_knowledge_content(graph, entity=None):
+    """提取知识内容，包括三元组和相关句子"""
+    if not graph or not graph.get('nodes'):
+        return ""
+
+    content_parts = []
+
+    # 添加实体相关的三元组信息
+    triples = convert_graph_to_triples(graph, entity)
+    if triples:
+        content_parts.append("【相关关系】")
+        for i, (subj, pred, obj) in enumerate(triples[:10]):  # 限制数量
+            content_parts.append(f"{i+1}. {subj} {pred} {obj}")
+
+    # 添加相关句子
+    if graph.get('sents'):
+        content_parts.append("\n【相关描述】")
+        for i, sent in enumerate(graph['sents'][:5]):  # 限制数量
+            content_parts.append(f"{i+1}. {sent}")
+
+    return "\n".join(content_parts)
+
+def get_entity_details(entity_name, graph=None):
+    """获取实体的详细信息"""
+    if not graph:
+        graph = search_node_item(entity_name)
+
+    if not graph or not graph.get('nodes'):
+        return None
+
+    details = {
+        "name": entity_name,
+        "related_entities": [],
+        "relationships": [],
+        "sentences": graph.get('sents', []),
+        "total_connections": 0
+    }
+
+    # 找到该实体的所有关系
+    for link in graph.get('links', []):
+        source = graph['nodes'][link['source']]
+        target = graph['nodes'][link['target']]
+        relation = link.get('name', '')
+
+        if entity_name in source['name'] or source['name'] in entity_name:
+            details['relationships'].append({
+                "type": "outgoing",
+                "relation": relation,
+                "target": target['name']
+            })
+            if target['name'] not in details['related_entities']:
+                details['related_entities'].append(target['name'])
+
+        elif entity_name in target['name'] or target['name'] in entity_name:
+            details['relationships'].append({
+                "type": "incoming",
+                "relation": relation,
+                "source": source['name']
+            })
+            if source['name'] not in details['related_entities']:
+                details['related_entities'].append(source['name'])
+
+    details['total_connections'] = len(details['relationships'])
+    return details
