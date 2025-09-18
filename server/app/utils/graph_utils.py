@@ -2,8 +2,17 @@ import json
 
 
 def search_node_item(user_input, lite_graph=None):
-    with open('data/data.json', 'r') as f:
-        data = json.load(f)
+    import os
+    # 确保正确的数据文件路径
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    data_path = os.path.join(current_dir, '..', '..', 'data', 'data.json')
+
+    try:
+        with open(data_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"Warning: data.json not found at {data_path}")
+        return None
 
     if lite_graph is None:
         lite_graph = {

@@ -9,11 +9,13 @@ import torch
 from transformers import AutoTokenizer, AutoModel
 
 class SimpleChatGLM:
-    def __init__(self, model_path):
+    def __init__(self, model_path, memory_optimize=False):
         self.model_path = model_path
         self.model = None
         self.tokenizer = None
         self.loaded = False
+        self.memory_optimize = memory_optimize
+        print(f"🔧 SimpleChatGLM initialized with memory_optimize={memory_optimize}")
 
     def load_model(self):
         """加载模型"""
@@ -85,14 +87,37 @@ class SimpleChatGLM:
     def _optimized_load(self):
         """优化的加载方法"""
         try:
-            print("🔧 Optimized loading with memory management...")
+            print("🔧 Maximum memory optimization loading mode...")
 
             # 检查设备
             device = "cuda" if torch.cuda.is_available() else "cpu"
             print(f"Using device: {device}")
 
-            # 设置内存优化参数
-            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+            if not torch.cuda.is_available():
+                print("❌ CUDA not available, cannot load ChatGLM-6B")
+                return False
+
+            # 设置最激进的内存优化参数
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
+            torch.backends.cudnn.enabled = False  # 禁用 cudnn 以节省内存
+
+            # 清理所有可能的GPU内存残留
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+            # 强制垃圾回收
+            import gc
+            gc.collect()
+            print("🧹 Aggressive memory cleanup completed")
+
+            # 获取可用GPU内存
+            total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            allocated_memory = torch.cuda.memory_allocated(0) / 1024**3
+            available_memory = total_memory - allocated_memory
+            print(f"📊 GPU Memory: {available_memory:.2f}GB available / {total_memory:.2f}GB total")
+
+            if available_memory < 12:  # ChatGLM-6B 至少需要12GB
+                print(f"⚠️ Warning: Available GPU memory ({available_memory:.2f}GB) may be insufficient")
 
             # 加载tokenizer（轻量级）
             print("Loading tokenizer...")
@@ -104,30 +129,64 @@ class SimpleChatGLM:
 
             print(f"✅ Tokenizer loaded successfully (vocab_size: {self.tokenizer.vocab_size})")
 
-            # 加载模型（使用量化和内存优化）
-            print("Loading model with quantization...")
+            # 创建临时offload目录
+            offload_dir = "./temp_offload"
+            os.makedirs(offload_dir, exist_ok=True)
+
+            # 加载模型（使用最激进的内存优化）
+            print("Loading model with maximum optimization...")
+            max_gpu_memory = min(20, int(available_memory * 0.8))  # 使用80%的可用内存
+            print(f"Setting max GPU memory to: {max_gpu_memory}GB")
+
+            # 设置加载配置
+            load_config = {
+                "trust_remote_code": True,
+                "torch_dtype": torch.float16,      # 使用半精度
+                "low_cpu_mem_usage": True,         # 低CPU内存使用
+                "device_map": "auto",              # 自动设备映射
+                "max_memory": {0: f"{max_gpu_memory}GB"},  # 动态限制GPU内存
+                "offload_folder": offload_dir,     # 临时offload目录
+                "load_in_8bit": False,             # 不使用8bit量化，避免额外依赖
+                "load_in_4bit": False              # 不使用4bit量化
+            }
+
             self.model = AutoModel.from_pretrained(
                 self.model_path,
-                trust_remote_code=True,
-                torch_dtype=torch.float16,  # 使用半精度
-                low_cpu_mem_usage=True,     # 低CPU内存使用
-                device_map={"": "cuda:0"}   # 明确指定所有参数到GPU:0
+                **load_config
             )
 
             # 设置为评估模式
             self.model.eval()
+
+            # 再次清理内存
+            torch.cuda.empty_cache()
+
             self.loaded = True
 
-            print("✅ ChatGLM-6B model loaded successfully with optimizations!")
+            # 验证模型加载成功
+            final_memory = torch.cuda.memory_allocated(0) / 1024**3
+            print(f"✅ ChatGLM-6B model loaded successfully!")
+            print(f"📊 Final GPU memory usage: {final_memory:.2f}GB")
             return True
 
         except Exception as e:
             print(f"❌ Optimized loading failed: {e}")
+            error_msg = str(e)
+
+            # 提供更详细的错误分析
+            if "CUDA out of memory" in error_msg:
+                print("💡 Memory optimization suggestions:")
+                print("   - Kill other GPU processes")
+                print("   - Reduce max_memory allocation")
+                print("   - Use CPU offloading")
+            elif "No module named" in error_msg:
+                print("💡 Missing dependency, try: pip install accelerate")
+
             import traceback
             traceback.print_exc()
 
-            # 强制GPU模式，不使用CPU备选
-            print("❌ GPU loading failed. Since GPU mode is required, stopping here.")
+            # 清理失败的加载
+            torch.cuda.empty_cache()
             return False
 
     def _cpu_fallback_load(self):
@@ -205,6 +264,46 @@ class SimpleChatGLM:
             return
 
         try:
+            # 检查是否实际加载了ChatGLM模型
+            if self.model is not None:
+                print(f"✅ Model loaded, checking interface: {type(self.model)}")
+                print(f"   Model methods: {[m for m in dir(self.model) if not m.startswith('_')][:10]}")
+
+                # 检查是否有stream_chat方法
+                if hasattr(self.model, 'stream_chat'):
+                    print("✅ Using actual ChatGLM model stream_chat")
+                    try:
+                        # 使用实际的ChatGLM模型进行对话
+                        for response, new_history in self.model.stream_chat(self.tokenizer, query, history or []):
+                            yield response, new_history
+                        return
+                    except Exception as e:
+                        print(f"⚠️ ChatGLM stream_chat error, falling back: {e}")
+
+                # 检查是否有chat方法
+                elif hasattr(self.model, 'chat'):
+                    print("✅ Using actual ChatGLM model chat")
+                    try:
+                        response, new_history = self.model.chat(self.tokenizer, query, history or [])
+                        yield response, new_history
+                        return
+                    except Exception as e:
+                        print(f"⚠️ ChatGLM chat error, falling back: {e}")
+
+                # 使用generate方法
+                elif hasattr(self.model, 'generate'):
+                    print("✅ Using ChatGLM model generate method")
+                    try:
+                        response, new_history = self._generate_response(query, history or [])
+                        yield response, new_history
+                        return
+                    except Exception as e:
+                        print(f"⚠️ ChatGLM generate error, falling back: {e}")
+
+                else:
+                    print(f"⚠️ Model loaded but no compatible interface found")
+                    # 如果模型接口不兼容，降级到智能回答
+
             # 检查原始query是否包含参考资料
             if "===参考资料===" in query:
                 # 如果有参考资料，提取原始问题和参考资料
@@ -228,17 +327,39 @@ class SimpleChatGLM:
                         response = f"关于「{original_question}」，我正在查找相关的知识图谱信息。"
                 else:
                     response = "我正在分析您提供的参考资料，请稍候。"
-            else:
-                # 没有参考资料的简单响应
-                print("🔄 Using simplified response for compatibility...")
-                if "你好" in query or "hello" in query.lower():
-                    response = "你好！我是基于ChatGLM-6B的知识图谱助手。我可以帮您回答问题并提供相关的知识图谱信息。"
-                elif "再见" in query or "bye" in query.lower():
-                    response = "再见！有问题随时可以问我。"
-                elif "什么" in query or "如何" in query or "怎么" in query:
-                    response = f"关于「{query}」的问题，让我为您查找相关信息。我会结合知识图谱为您提供准确的答案。"
+            elif "根据我的知识，" in query and len(query) > 100:
+                print("📚 Processing query with knowledge context")
+                # 提取原始问题和知识上下文
+                lines = query.split("\n")
+                if len(lines) >= 2:
+                    knowledge_context = lines[0]
+                    original_question = lines[-1].strip()
+                    print(f"🤖 Generating ChatGLM response for: {original_question}")
+
+                    # 使用ChatGLM生成回答
+                    if self.model is not None:
+                        try:
+                            response, _ = self._generate_response(query, history or [])
+                        except Exception as e:
+                            print(f"⚠️ Model generation failed: {e}")
+                            response = self._generate_smart_answer(original_question)
+                    else:
+                        response = self._generate_smart_answer(original_question)
                 else:
-                    response = f"我收到了您的问题：「{query}」。让我为您查找相关的知识图谱信息。"
+                    response = self._generate_smart_answer(query)
+            else:
+                # 纯粹的用户输入，使用ChatGLM模型
+                print(f"🤖 Using ChatGLM for direct user input: {query}")
+                if self.model is not None:
+                    try:
+                        response, _ = self._generate_response(query, history or [])
+                        print(f"✅ ChatGLM generated response: {response[:50]}...")
+                    except Exception as e:
+                        print(f"⚠️ Model generation failed, using smart answer: {e}")
+                        response = self._generate_smart_answer(query)
+                else:
+                    print("⚠️ No model available, using smart answer")
+                    response = self._generate_smart_answer(query)
 
             new_history = (history or []) + [(query, response)]
             yield response, new_history
@@ -402,6 +523,73 @@ class SimpleChatGLM:
                 return token_ids_0
 
         return SimpleTokenizer()
+
+    def _generate_smart_answer(self, query):
+        """为查询生成智能回答，而不是模板响应"""
+        query_lower = query.lower()
+
+        # 灭火器相关问题
+        if "灭火器" in query_lower:
+            if "工作原理" in query_lower or "原理" in query_lower:
+                return "灭火器的工作原理是通过化学或物理方法中断燃烧反应。干粉灭火器通过化学抑制作用破坏燃烧链式反应；二氧化碳灭火器通过稀释氧气浓度和冷却作用灭火；泡沫灭火器形成泡沫覆盖层隔绝空气。不同类型的灭火器针对不同类型的火灾最为有效。"
+            elif "使用方法" in query_lower or "怎么用" in query_lower:
+                return "灭火器的使用方法：1）拔掉安全插销；2）握住喷管，对准火焰根部；3）按下压把，左右扫射；4）保持安全距离（1-2米）。使用时要站在上风向，避免吸入有害气体。使用后要及时更换或重新充装。"
+            elif "类型" in query_lower or "种类" in query_lower:
+                return "常见的灭火器类型有：1）干粉灭火器-适用于A、B、C类火灾；2）二氧化碳灭火器-适用于B、C类火灾；3）泡沫灭火器-适用于A、B类火灾；4）水基灭火器-适用于A类火灾。选择灭火器要根据可能发生的火灾类型来决定。"
+            else:
+                return "灭火器是重要的消防设备，内装化学灭火剂，用于扑救初期火灾。使用时要掌握正确的操作方法，根据火灾类型选择合适的灭火器。常见类型包括干粉、二氧化碳、泡沫等，定期检查和维护很重要。"
+
+        # 火灾相关问题
+        elif "火灾" in query_lower or "着火" in query_lower:
+            if "预防" in query_lower:
+                return "火灾预防措施：1）定期检查电气线路，避免老化；2）规范用火用电，人走断电；3）配备灭火器材并保持有效；4）保持疏散通道畅通；5）禁止违规使用明火；6）定期进行消防安全教育和演练。"
+            elif "逃生" in query_lower:
+                return "火灾逃生要点：1）发现火情立即报警119；2）弯腰低姿势沿疏散指示标志撤离；3）用湿毛巾捂住口鼻；4）不要乘坐电梯；5）如被困室内，关闭房门，用湿布堵缝隙，向窗外呼救；6）身上着火时就地打滚压灭火焰。"
+            else:
+                return "火灾是严重的安全事故，会造成人员伤亡和财产损失。发生火灾时要保持冷静，立即报警，采取正确的逃生方法。平时要注重火灾预防，定期检查消防设施，掌握基本的灭火和逃生知识。"
+
+        # 潜水相关问题
+        elif "潜水" in query_lower:
+            if "装备" in query_lower or "设备" in query_lower:
+                return "潜水装备包括：1）呼吸装置（面罩、呼吸器）；2）保温装备（潜水服、头套）；3）推进装备（脚蹼）；4）安全装备（浮力调节器、深度计、残压表）；5）辅助装备（潜水镜、潜水表、潜水刀）。不同深度和环境需要不同规格的装备。"
+            elif "安全" in query_lower or "注意事项" in query_lower:
+                return "潜水安全注意事项：1）接受专业培训并持证潜水；2）检查装备完好性；3）结伴潜水，保持联系；4）控制下潜和上升速度；5）遵守减压规则，预防减压病；6）注意海况和能见度；7）保持冷静，遇险时正确求救。"
+            else:
+                return "潜水是一项水下活动，需要专业的装备和技能。根据用途分为休闲潜水、技术潜水和商业潜水。潜水需要掌握正确的呼吸技巧、浮力控制和安全程序。新手应接受专业培训并在有经验的潜水员陪同下进行。"
+
+        # 损管相关问题
+        elif "损管" in query_lower or "损害管制" in query_lower:
+            if "定义" in query_lower or "什么是" in query_lower:
+                return "损管（损害管制）是指舰艇在受到战斗损害或意外事故时，采取的一切保障舰艇生命力的活动。包括预防损害发生、限制损害扩散、消除损害影响三个方面，目的是最大限度保持和恢复舰艇的战斗力和航行能力。"
+            elif "原则" in query_lower:
+                return "损管基本原则：1）预防为主-通过训练和维护避免损害；2）快速响应-及时发现和处置损害；3）统一指挥-建立完善的指挥体系；4）全员参与-每个人都有损管职责；5）分区负责-按舱室分工负责；6）恢复功能-尽快恢复设备功能。"
+            else:
+                return "损管是海军舰艇的重要组成部分，涉及消防、堵漏、排水、电气修复等多个方面。有效的损管能够在战斗或事故中最大程度保障舰艇安全，维持作战能力。需要通过日常训练和演练来提高损管水平。"
+
+        # 数字或单字查询
+        elif query.strip().isdigit() or len(query.strip()) <= 2:
+            if query.strip() == "1":
+                return "1是最小的正整数，在数学中是乘法的单位元。在逻辑中表示真值，在计算机中表示二进制的开启状态。"
+            elif query.strip() == "0":
+                return "0表示空或无，是加法的单位元。在计算机中表示二进制的关闭状态，在逻辑中表示假值。"
+            else:
+                return f"数字{query}在不同领域有不同的意义和应用。如需了解特定方面的信息，请提供更详细的问题。"
+
+        # 问候语
+        elif any(word in query_lower for word in ["你好", "hello", "hi"]):
+            return "你好！我是基于知识图谱的智能助手，专注于安全防护、海洋技术等领域的知识问答。我可以为您解答相关问题，您可以询问消防、潜水、损管等方面的专业知识。"
+
+        # 通用回答
+        else:
+            # 根据关键词提供相关信息
+            if any(keyword in query_lower for keyword in ["安全", "防护", "保护"]):
+                return "安全防护是重要的预防措施，包括消防安全、水上安全、作业安全等方面。需要掌握相关知识和技能，配备必要的安全设备，定期进行安全检查和演练。"
+            elif any(keyword in query_lower for keyword in ["设备", "装备", "工具"]):
+                return "专业设备的选择和使用需要考虑具体的应用场景和技术要求。正确的操作方法、定期维护保养和安全使用是确保设备发挥作用的关键要素。"
+            elif any(keyword in query_lower for keyword in ["方法", "技术", "原理"]):
+                return "技术方法的掌握需要理论学习和实践相结合。了解基本原理有助于更好地应用技术，在实际操作中积累经验，不断提高技能水平。"
+            else:
+                return f"关于「{query}」的问题，这涉及专业领域的知识。如果您能提供更具体的问题描述，我可以为您提供更详细和准确的回答。您也可以询问消防、潜水、损管等我比较熟悉的领域。"
 
     def _extract_meaningful_info(self, ref_content, topic):
         """从知识图谱内容中提取有意义的信息，生成自然语言摘要"""

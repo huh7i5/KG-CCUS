@@ -180,7 +180,7 @@ const sendMessage = () => {
     const user_input = state.inputText
     const cur_res_id = state.messages[state.messages.length - 1].id
     state.inputText = ''
-    fetch('/api/chat', {
+    fetch('http://127.0.0.1:8000/chat/', {
       method: 'POST',
       body: JSON.stringify({
         prompt: user_input,
@@ -207,16 +207,8 @@ const sendMessage = () => {
             if (wiki?.title) info.title = wiki.title
             if (wiki?.summary) info.description = wiki.summary
 
-            // 确保图表在DOM准备好后初始化
-            if (info.graph && info.graph.nodes && myChart) {
-              setTimeout(() => {
-                try {
-                  myChart.setOption(graphOption(info.graph));
-                } catch (e) {
-                  console.error('ECharts rendering error:', e);
-                }
-              }, 100);
-            }
+            // 渲染图表
+            renderGraphIfReady()
             return
           }
 
@@ -241,6 +233,12 @@ const sendMessage = () => {
             }
             if (parsedData.conversation_summary) {
               conversationSummary.value = parsedData.conversation_summary
+            }
+
+            // 每次接收到新数据时尝试渲染图表
+            if (graph && graph.nodes && graph.nodes.length > 0) {
+              info.graph = graph;
+              renderGraphIfReady();
             }
 
             buffer = ''
@@ -374,6 +372,74 @@ const fetchEntityDetails = async (entityName) => {
 const askSuggestion = (suggestion) => {
   state.inputText = suggestion
   sendMessage()
+}
+
+// 动态初始化图表
+const initializeChart = (callback) => {
+  console.log('Attempting to initialize chart...');
+  const chartDom = document.getElementById('lite_graph');
+
+  if (!chartDom) {
+    console.error('Chart container not found');
+    return;
+  }
+
+  if (chartDom.clientWidth === 0 || chartDom.clientHeight === 0) {
+    console.log('Chart container not ready, retrying...');
+    setTimeout(() => initializeChart(callback), 100);
+    return;
+  }
+
+  try {
+    myChart = echarts.init(chartDom);
+    handleGraphClick(); // 绑定点击事件
+    console.log('Chart initialized successfully');
+
+    // 监听窗口大小变化
+    window.addEventListener('resize', () => {
+      if (myChart) {
+        myChart.resize();
+      }
+    });
+
+    if (callback) callback();
+  } catch (e) {
+    console.error('Chart initialization failed:', e);
+  }
+}
+
+// 检查并渲染图表
+const renderGraphIfReady = () => {
+  console.log('Checking if ready to render graph...');
+
+  if (!info.graph || !info.graph.nodes || info.graph.nodes.length === 0) {
+    console.log('No graph data available');
+    return;
+  }
+
+  console.log('Graph data available with', info.graph.nodes.length, 'nodes');
+
+  // 如果图表还未初始化，先初始化
+  if (!myChart) {
+    console.log('Chart not initialized, initializing first...');
+    initializeChart(() => {
+      if (myChart && info.graph) {
+        console.log('Rendering graph after initialization');
+        try {
+          myChart.setOption(graphOption(info.graph));
+        } catch (e) {
+          console.error('Graph rendering error:', e);
+        }
+      }
+    });
+  } else {
+    console.log('Chart ready, rendering graph');
+    try {
+      myChart.setOption(graphOption(info.graph));
+    } catch (e) {
+      console.error('Graph rendering error:', e);
+    }
+  }
 }
 
 
