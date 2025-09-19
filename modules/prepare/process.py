@@ -1,27 +1,32 @@
 import os
-# 暂时禁用PaddleNLP依赖
-# from data.schema import schema_v4
-# from paddle import inference as paddle_infer
-# from paddlenlp import Taskflow
+from data.schema import schema_ccus
+from paddlenlp import Taskflow
+import paddle
+
+# 全局变量缓存UIE模型，避免重复加载
+_uie_model = None
+
+def get_uie_model():
+    global _uie_model
+    if _uie_model is None:
+        print("初始化UIE模型...")
+        paddle.set_device('gpu:0')
+        _uie_model = Taskflow("information_extraction", schema=schema_ccus.schema, batch_size=4)
+        print("UIE模型加载完成！")
+    return _uie_model
 
 # 定义一个函数，用于关系抽取
 def paddle_relation_ie(content):
-    print("Warning: UIE model disabled due to PaddleNLP dependency issues")
-    # relation_ie = Taskflow("information_extraction", schema=schema_v4.schema, batch_size=2)
-    # return relation_ie(content)
-    return []
-
+    model = get_uie_model()
+    return model(content)
 
 # 关系抽取并修改json文件
 def rel_json(content):
-    print("Warning: Relation extraction disabled")
-    return []  # 暂时返回空列表
+    return paddle_relation_ie(content)
 
 
 # 执行函数
-#
 def uie_execute(texts):
-    print("Warning: UIE execution disabled due to PaddleNLP issues")
     sent_id = 0
     all_items = []
     for line in texts:

@@ -10,7 +10,7 @@ from modules.knowledge_graph_builder import KnowledgeGraphBuilder
 
 def arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", type=str, default="project_v1")
+    parser.add_argument("--project", type=str, default="ccus_v1")
     parser.add_argument("--resume", type=str, default=None, help="resume from a checkpoint")# 作用是从一个checkpoint恢复
     parser.add_argument("--gpu", type=str, default="1", help="gpu id")  # 修改 GPU 在这里
     args = parser.parse_args()

@@ -6,9 +6,10 @@ from app.utils.chat_glm import start_model
 apps = Flask(__name__)# 这段代码是为了解决跨域问题，Flask默认不支持跨域
 CORS(apps, resources=r'/*')# CORS的用法是
 
-from app.views import chat, graph
+from app.views import chat, graph, ccus_decision
 apps.register_blueprint(chat.mod)
 apps.register_blueprint(graph.mod)
+apps.register_blueprint(ccus_decision.mod)
 
 
 @apps.route('/', methods=["GET"])

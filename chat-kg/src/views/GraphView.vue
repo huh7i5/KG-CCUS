@@ -30,15 +30,18 @@ const state = reactive({
 let myChart;
 
 const fetchWebkitDepData = () => {
-  axios.get('/api/graph').then(response => response.data.data)
+  axios.get('http://localhost:8002/graph/').then(response => response.data.data)
     .then(webkitDep => {
       state.graph = webkitDep
       myChart.hideLoading()
       webkitDep.nodes.forEach(function (node) {
-        node.label = {
-          show: node.symbolSize > 100
-        }
+        // 调整节点大小
         node.symbolSize = node.symbolSize / 10
+        // 设置标签显示条件（调整后的大小）
+        node.label = {
+          show: true,  // 显示所有节点标签
+          fontSize: Math.max(8, Math.min(14, node.symbolSize * 0.8))  // 根据节点大小动态调整字体大小
+        }
       })
       const option = {
         tooltip: {

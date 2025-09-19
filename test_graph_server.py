@@ -1,13 +1,18 @@
-import os
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+简化的测试服务器，只提供图形API
+"""
+
 import json
-from flask import request, Blueprint, jsonify
-from thefuzz import process
+import os
+from flask import Flask, jsonify
+from flask_cors import CORS
 
+app = Flask(__name__)
+CORS(app, resources=r'/*')
 
-mod = Blueprint('graph', __name__, url_prefix='/graph')
-
-
-@mod.route('/', methods=['GET'])
+@app.route('/graph/', methods=['GET'])
 def graph():
     # 尝试加载CCUS知识图谱数据，如果不存在则使用原始数据
     ccus_data_path = 'data/ccus_data.json'
@@ -27,14 +32,10 @@ def graph():
         'message': message
     })
 
+@app.route('/', methods=['GET'])
+def index():
+    return jsonify({"message": "Test Graph Server Running!"})
 
-# @mod.route('/search', methods=['GET'])
-# def get_triples():
-#     # 获取参数
-#     user_input = request.args.get('search')
-#     result = search_node_item(user_input)
-
-#     return jsonify({
-#         'data': result,
-#         'message': 'Got it!'
-#     })
+if __name__ == '__main__':
+    print("🚀 Starting test graph server...")
+    app.run(host='0.0.0.0', port=8002, debug=False)
