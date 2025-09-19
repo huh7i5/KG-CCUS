@@ -53,11 +53,13 @@ class Ner:
             entities: 实体列表
         '''
         entities = []
+        text_lower = text.lower()  # 用于大小写不敏感匹配
 
-        # 基于关键词匹配提取实体
+        # 基于关键词匹配提取实体（支持大小写不敏感）
         for entity in self.entity_dict:
-            if entity in text and entity not in entities:
-                entities.append(entity)
+            entity_lower = entity.lower()
+            if entity_lower in text_lower and entity not in entities:
+                entities.append(entity)  # 保留原始实体名称
 
         # 按长度排序，优先选择较长的实体（避免匹配子串）
         entities.sort(key=len, reverse=True)
@@ -67,7 +69,7 @@ class Ner:
         for entity in entities:
             is_substring = False
             for existing in filtered_entities:
-                if entity in existing and entity != existing:
+                if entity.lower() in existing.lower() and entity != existing:
                     is_substring = True
                     break
             if not is_substring:

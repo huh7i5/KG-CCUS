@@ -1,5 +1,32 @@
 import json
+import re
 
+
+def clean_text_for_json(text):
+    """清理文本以确保JSON序列化安全"""
+    if not isinstance(text, str):
+        return text
+
+    # 移除或替换问题字符
+    text = text.replace('\n', ' ')  # 换行符替换为空格
+    text = text.replace('\r', ' ')  # 回车符替换为空格
+    text = text.replace('\t', ' ')  # 制表符替换为空格
+    text = text.replace('"', "'")   # 双引号替换为单引号
+
+    # 移除控制字符
+    text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+
+    # 压缩多个空格为单个空格
+    text = re.sub(r'\s+', ' ', text)
+
+    # 移除首尾空格
+    text = text.strip()
+
+    # 限制长度避免过长的实体名
+    if len(text) > 200:
+        text = text[:197] + "..."
+
+    return text
 
 def search_node_item(user_input, lite_graph=None):
     import os
@@ -36,7 +63,7 @@ def search_node_item(user_input, lite_graph=None):
                 target = data['nodes'][int(edge['target'])]
                 if source['name'] in serch_node or serch_node in source['name'] or target['name'] in serch_node or serch_node in target['name']:
                 # if source['name'] == serch_node or target['name'] == serch_node:
-                    sent = data['sents'][edge['sent']]
+                    sent = data['sents'][str(edge['sent'])]
                     if sent not in lite_graph['sents']:
                         edge['sent'] = len(lite_graph['sents'])
                         lite_graph['sents'].append(sent)
