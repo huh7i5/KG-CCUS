@@ -19,8 +19,15 @@ def auto_filter(items, model_name_or_path):
 
         relations = []
         for relation in example["relationMentions"]:
-            sub_tokens = tokenizer.tokenize(relation["em1Text"])
-            obj_tokens = tokenizer.tokenize(relation["em2Text"])
+            # 检查关系数据格式，如果已经是SPN4RE格式就直接使用
+            if isinstance(relation, dict) and "em1Text" in relation and "em2Text" in relation:
+                # 已经是SPN4RE格式
+                sub_tokens = tokenizer.tokenize(relation["em1Text"])
+                obj_tokens = tokenizer.tokenize(relation["em2Text"])
+            else:
+                # 可能是UIE原始格式，跳过这个项目
+                print(f"Skipping relation in old UIE format: {type(relation)}")
+                continue
 
             if len(sub_tokens) == 0 or len(obj_tokens) == 0:
                 continue
