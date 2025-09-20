@@ -30,7 +30,7 @@ const state = reactive({
 let myChart;
 
 const fetchWebkitDepData = () => {
-  axios.get('http://localhost:8002/graph/').then(response => response.data.data)
+  axios.get('http://localhost:8000/graph/').then(response => response.data.data)
     .then(webkitDep => {
       state.graph = webkitDep
       myChart.hideLoading()
@@ -143,7 +143,7 @@ onMounted(() => {
   myChart = echarts.init(chartRef.value)
   myChart.showLoading()
   fetchWebkitDepData()
-  chart.value.on('click', clickNode)
+  myChart.on('click', clickNode)
 })
 </script>
 

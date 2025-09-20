@@ -273,6 +273,36 @@ class SimpleChatGLM:
                 if hasattr(self.model, 'stream_chat'):
                     print("✅ Using actual ChatGLM model stream_chat")
                     try:
+                        # 修复tokenizer兼容性问题
+                        if hasattr(self.tokenizer, 'padding_side'):
+                            # 临时移除padding_side属性来避免兼容性问题
+                            original_padding_side = getattr(self.tokenizer, 'padding_side', None)
+                            if hasattr(self.tokenizer, '_pad'):
+                                # 备份原始的_pad方法
+                                original_pad = self.tokenizer._pad
+                                # 创建兼容的_pad方法
+                                def compatible_pad(self, encoded_inputs, max_length=None, **kwargs):
+                                    # 移除padding_side参数
+                                    kwargs.pop('padding_side', None)
+                                    return original_pad(encoded_inputs, max_length=max_length, **kwargs)
+                                # 临时替换方法
+                                self.tokenizer._pad = compatible_pad.__get__(self.tokenizer, type(self.tokenizer))
+
+                        # 修复ChatGLM模型配置兼容性问题
+                        if hasattr(self.model, 'generation_config'):
+                            gen_config = self.model.generation_config
+                            if hasattr(gen_config, '_eos_token_tensor'):
+                                delattr(gen_config, '_eos_token_tensor')
+                            if hasattr(gen_config, '_pad_token_tensor'):
+                                delattr(gen_config, '_pad_token_tensor')
+
+                        if hasattr(self.model, 'config'):
+                            config = self.model.config
+                            if not hasattr(config, 'num_hidden_layers') and hasattr(config, 'num_layers'):
+                                config.num_hidden_layers = config.num_layers
+                            elif not hasattr(config, 'num_hidden_layers'):
+                                config.num_hidden_layers = 28
+
                         # 使用实际的ChatGLM模型进行对话
                         for response, new_history in self.model.stream_chat(self.tokenizer, query, history or []):
                             yield response, new_history
@@ -284,6 +314,30 @@ class SimpleChatGLM:
                 elif hasattr(self.model, 'chat'):
                     print("✅ Using actual ChatGLM model chat")
                     try:
+                        # 同样的tokenizer兼容性修复
+                        if hasattr(self.tokenizer, 'padding_side'):
+                            if hasattr(self.tokenizer, '_pad'):
+                                original_pad = self.tokenizer._pad
+                                def compatible_pad(self, encoded_inputs, max_length=None, **kwargs):
+                                    kwargs.pop('padding_side', None)
+                                    return original_pad(encoded_inputs, max_length=max_length, **kwargs)
+                                self.tokenizer._pad = compatible_pad.__get__(self.tokenizer, type(self.tokenizer))
+
+                        # 修复ChatGLM模型配置兼容性问题
+                        if hasattr(self.model, 'generation_config'):
+                            gen_config = self.model.generation_config
+                            if hasattr(gen_config, '_eos_token_tensor'):
+                                delattr(gen_config, '_eos_token_tensor')
+                            if hasattr(gen_config, '_pad_token_tensor'):
+                                delattr(gen_config, '_pad_token_tensor')
+
+                        if hasattr(self.model, 'config'):
+                            config = self.model.config
+                            if not hasattr(config, 'num_hidden_layers') and hasattr(config, 'num_layers'):
+                                config.num_hidden_layers = config.num_layers
+                            elif not hasattr(config, 'num_hidden_layers'):
+                                config.num_hidden_layers = 28
+
                         response, new_history = self.model.chat(self.tokenizer, query, history or [])
                         yield response, new_history
                         return
@@ -388,19 +442,63 @@ class SimpleChatGLM:
 
             # 使用更简单的编码方法避免padding问题
             input_text = full_query
-            input_ids = self.tokenizer.encode(input_text)
-            input_ids = torch.tensor([input_ids], dtype=torch.long).cuda()
+            try:
+                # 使用简化的编码方法避免tokenizer问题
+                input_ids = self.tokenizer.encode(input_text, add_special_tokens=True)
+                if isinstance(input_ids, list):
+                    input_ids = torch.tensor([input_ids], dtype=torch.long)
+                else:
+                    input_ids = input_ids.unsqueeze(0)
+
+                if torch.cuda.is_available():
+                    input_ids = input_ids.cuda()
+            except Exception as e:
+                print(f"Tokenization error: {e}")
+                # 使用更简单的fallback编码
+                input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
+                if torch.cuda.is_available():
+                    input_ids = input_ids.cuda()
 
             with torch.no_grad():
-                outputs = self.model.generate(
-                    input_ids,
-                    max_length=input_ids.shape[1] + 512,
-                    do_sample=True,
-                    temperature=0.7,
-                    pad_token_id=3,
-                    eos_token_id=2,
-                    repetition_penalty=1.1
-                )
+                try:
+                    # Fix ChatGLM compatibility issues
+                    generate_kwargs = {
+                        'input_ids': input_ids,
+                        'max_length': input_ids.shape[1] + 512,
+                        'do_sample': True,
+                        'temperature': 0.7,
+                        'pad_token_id': 3,
+                        'eos_token_id': 2,
+                        'repetition_penalty': 1.1
+                    }
+
+                    # Handle GenerationConfig compatibility issues
+                    if hasattr(self.model, 'generation_config'):
+                        # Remove problematic attributes from generation config
+                        gen_config = self.model.generation_config
+                        if hasattr(gen_config, '_eos_token_tensor'):
+                            delattr(gen_config, '_eos_token_tensor')
+                        if hasattr(gen_config, '_pad_token_tensor'):
+                            delattr(gen_config, '_pad_token_tensor')
+
+                    # Handle ChatGLMConfig compatibility issues
+                    if hasattr(self.model, 'config'):
+                        config = self.model.config
+                        if not hasattr(config, 'num_hidden_layers') and hasattr(config, 'num_layers'):
+                            config.num_hidden_layers = config.num_layers
+                        elif not hasattr(config, 'num_hidden_layers'):
+                            config.num_hidden_layers = 28  # Default for ChatGLM-6B
+
+                    outputs = self.model.generate(**generate_kwargs)
+                except Exception as gen_error:
+                    print(f"⚠️ Model.generate failed: {gen_error}")
+                    # Try with minimal parameters
+                    try:
+                        outputs = self.model.generate(input_ids, max_length=input_ids.shape[1] + 256)
+                    except Exception as min_error:
+                        print(f"⚠️ Even minimal generate failed: {min_error}")
+                        # Use fallback response
+                        raise Exception(f"Model generation failed: {gen_error}")
 
             # 解码生成的部分
             generated_ids = outputs[0][input_ids.shape[1]:]
@@ -416,17 +514,22 @@ class SimpleChatGLM:
         """基于模板的回复生成"""
         # 基于问题内容提供智能回复
         if "你好" in query or "hello" in query.lower():
-            response = "你好！我是基于ChatGLM-6B的智能助手，可以回答各种问题。有什么我可以帮助您的吗？"
+            response = "您好！我是专门针对CCUS（碳捕集利用与储存）技术的智能问答助手。我可以为您解答关于碳捕集、碳利用、碳封存等相关技术问题。请问有什么我可以帮助您的吗？"
+        elif "介绍" in query and ("自己" in query or "你" in query):
+            response = "我是基于知识图谱的CCUS技术智能问答系统，专注于碳捕集利用与储存（Carbon Capture, Utilization and Storage）领域。我拥有1400+个CCUS相关实体的知识库，可以为您提供：\n\n• 碳捕集技术的详细介绍\n• 不同行业的CCUS应用案例\n• 技术发展趋势和政策支持\n• 成本效益分析和投资信息\n• 项目建设和运营经验\n\n您可以询问任何CCUS相关问题，我会结合知识图谱为您提供专业解答！"
         elif "再见" in query or "bye" in query.lower():
-            response = "再见！希望我的回答对您有帮助。"
+            response = "再见！希望我在CCUS技术方面的解答对您有所帮助。"
         elif "谢谢" in query:
-            response = "不用谢！我很乐意为您提供帮助。"
-        elif any(word in query for word in ["灭火器", "消防"]):
-            response = "灭火器是一种重要的消防设备，用于扑灭小规模火灾。不同类型的灭火器适用于不同类型的火源，使用前需要了解正确的操作方法。"
-        elif any(word in query for word in ["什么", "如何", "怎么", "为什么"]):
-            response = f"关于您提出的问题「{query}」，这是一个很好的问题。基于我的知识，我会为您提供详细的回答。"
+            response = "不用谢！我很高兴能为您提供CCUS技术方面的帮助。"
+        elif any(word in query for word in ["碳捕集", "CCUS", "碳储存", "碳利用", "二氧化碳"]):
+            if "技术" in query or "方法" in query:
+                response = f"关于「{query}」，CCUS技术主要包括三个核心环节：\n\n1. **碳捕集（Capture）**：从工业排放源捕获CO2，包括燃烧后捕集、燃烧前捕集、富氧燃烧等技术\n2. **碳利用（Utilization）**：将捕集的CO2转化为有价值的产品，如化工原料、燃料等\n3. **碳储存（Storage）**：将CO2安全封存在地质结构中，实现长期储存\n\n目前我国在电力、钢铁、水泥、化工等行业都有CCUS示范项目。您想了解哪个具体方面呢？"
+            else:
+                response = f"关于「{query}」，这是CCUS技术领域的重要话题。CCUS作为实现碳中和目标的关键技术路径，在我国能源转型中发挥着重要作用。请告诉我您想了解的具体方面，我可以为您提供更详细的信息。"
+        elif any(word in query for word in ["什么", "如何", "怎么", "为什么", "哪些"]):
+            response = f"关于「{query}」，这是一个很好的问题。基于我的CCUS知识库，我可以为您提供专业的技术解答。请稍等，我正在为您查找相关信息..."
         else:
-            response = f"我理解您询问的是关于「{query}」的问题。让我基于我的知识为您提供合适的回答。"
+            response = f"我理解您想了解「{query}」相关信息。作为CCUS专业问答系统，我会尽力为您提供准确的技术资料和分析。如果您的问题涉及碳捕集、利用或储存技术，我可以提供更详细的专业解答。"
 
         new_history = history + [(query, response)]
         return response, new_history

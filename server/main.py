@@ -14,7 +14,7 @@ if __name__ == '__main__':
     apps.secret_key = os.urandom(24)
 
     # 查找可用端口
-    def find_free_port(start_port=8000):
+    def find_free_port(start_port=5000):
         for port in range(start_port, start_port + 100):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 try:
@@ -24,7 +24,7 @@ if __name__ == '__main__':
                     continue
         return None
 
-    port = find_free_port(8000)
+    port = find_free_port(5000)
     if port:
         print(f"🚀 Starting server on port {port}")
         apps.run(host='0.0.0.0', port=port, debug=False, threaded=True)

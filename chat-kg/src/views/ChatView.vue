@@ -175,11 +175,21 @@ const updateLastReceivedMessage = (message, id) => {
 
 const sendMessage = () => {
   if (state.inputText.trim()) {
+    console.log('🚀 [FRONTEND] 开始发送消息:', state.inputText)
+    console.log('🚀 [FRONTEND] 当前历史记录长度:', state.history.length)
+
     appendMessage(state.inputText, 'sent')
     appendMessage('检索中……', 'received')
     const user_input = state.inputText
     const cur_res_id = state.messages[state.messages.length - 1].id
     state.inputText = ''
+
+    console.log('📡 [FRONTEND] 向后端发送请求 - URL: http://127.0.0.1:8000/chat/')
+    console.log('📡 [FRONTEND] 请求数据:', {
+      prompt: user_input,
+      history: state.history
+    })
+
     fetch('http://127.0.0.1:8000/chat/', {
       method: 'POST',
       body: JSON.stringify({
@@ -190,36 +200,94 @@ const sendMessage = () => {
         'Content-Type': 'application/json'
       }
     }).then((response) => {
+      console.log('📨 [FRONTEND] 收到响应状态:', response.status)
+      console.log('📨 [FRONTEND] 响应头:', response.headers)
+
+      if (!response.ok) {
+        console.error('❌ [FRONTEND] 响应状态不正常:', response.statusText)
+        updateLastReceivedMessage('服务器响应错误：' + response.statusText, cur_res_id)
+        return
+      }
+
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
       let pic
       let wiki
       let graph
+      let chunkCount = 0
+
+      console.log('🔄 [FRONTEND] 开始读取流式响应')
+
       // 逐步读取响应文本
       const readChunk = () => {
         return reader.read().then(({ done, value }) => {
           if (done) {
-            console.log('Finished')
+            console.log('✅ [FRONTEND] 流式读取完成')
+            console.log('✅ [FRONTEND] 最终数据 - pic:', !!pic, 'wiki:', !!wiki, 'graph:', !!graph)
+
             // 处理完成时的最终更新
-            if (pic) info.image = pic
-            if (graph) info.graph = graph
-            if (wiki?.title) info.title = wiki.title
-            if (wiki?.summary) info.description = wiki.summary
+            if (pic) {
+              info.image = pic
+              console.log('🖼️ [FRONTEND] 更新图片数据')
+            }
+            if (graph) {
+              info.graph = graph
+              console.log('📊 [FRONTEND] 更新图谱数据，节点数:', graph.nodes?.length || 0)
+            }
+            if (wiki?.title) {
+              info.title = wiki.title
+              console.log('📰 [FRONTEND] 更新标题:', wiki.title)
+            }
+            if (wiki?.summary) {
+              info.description = wiki.summary
+              console.log('📝 [FRONTEND] 更新描述长度:', wiki.summary.length)
+            }
 
             // 渲染图表
             renderGraphIfReady()
             return
           }
 
-          buffer += decoder.decode(value, { stream: true })
-          console.log(buffer)
+          chunkCount++
+          const chunk = decoder.decode(value, { stream: true })
+          buffer += chunk
+
+          console.log(`📦 [FRONTEND] 接收到第${chunkCount}个数据块，大小:`, chunk.length)
+          console.log(`📦 [FRONTEND] 数据块内容:`, chunk.substring(0, 100) + (chunk.length > 100 ? '...' : ''))
+          console.log(`📦 [FRONTEND] 当前缓冲区大小:`, buffer.length)
+
           const message = buffer.trim().split('\n').pop()
+          console.log('🔍 [FRONTEND] 尝试解析最后一行消息:', message?.substring(0, 200) + (message?.length > 200 ? '...' : ''))
+
           // 尝试解析 message
           try {
             const parsedData = JSON.parse(message)
-            updateLastReceivedMessage(parsedData.updates.response, cur_res_id)
-            state.history = parsedData.history
+            console.log('✅ [FRONTEND] JSON解析成功')
+            console.log('✅ [FRONTEND] 响应数据结构:', {
+              hasUpdates: !!parsedData.updates,
+              hasResponse: !!parsedData.updates?.response,
+              hasHistory: !!parsedData.history,
+              hasImage: !!parsedData.image,
+              hasGraph: !!parsedData.graph,
+              hasWiki: !!parsedData.wiki,
+              hasEntityDetails: !!parsedData.entity_details,
+              hasSuggestions: !!parsedData.suggestions,
+              hasConversationSummary: !!parsedData.conversation_summary
+            })
+
+            if (parsedData.updates?.response) {
+              console.log('💬 [FRONTEND] 更新消息内容:', parsedData.updates.response.substring(0, 100) + (parsedData.updates.response.length > 100 ? '...' : ''))
+              updateLastReceivedMessage(parsedData.updates.response, cur_res_id)
+            } else {
+              console.warn('⚠️ [FRONTEND] 没有找到response字段')
+            }
+
+            if (parsedData.history) {
+              state.history = parsedData.history
+              console.log('📚 [FRONTEND] 更新历史记录，新长度:', parsedData.history.length)
+            }
+
             pic = parsedData.image
             wiki = parsedData.wiki
             graph = parsedData.graph
@@ -227,32 +295,41 @@ const sendMessage = () => {
             // 更新新增数据
             if (parsedData.entity_details) {
               selectedEntity.value = parsedData.entity_details[0] || null
+              console.log('🏷️ [FRONTEND] 更新实体详情:', parsedData.entity_details.length, '个实体')
             }
             if (parsedData.suggestions) {
               suggestions.value = parsedData.suggestions
+              console.log('💡 [FRONTEND] 更新建议问题:', parsedData.suggestions.length, '个建议')
             }
             if (parsedData.conversation_summary) {
               conversationSummary.value = parsedData.conversation_summary
+              console.log('📊 [FRONTEND] 更新对话摘要')
             }
 
             // 每次接收到新数据时尝试渲染图表
             if (graph && graph.nodes && graph.nodes.length > 0) {
               info.graph = graph;
+              console.log('📈 [FRONTEND] 尝试渲染图表，节点数:', graph.nodes.length)
               renderGraphIfReady();
             }
 
             buffer = ''
           } catch (e) {
-            console.log('JSON parse error:', e)
+            console.error('❌ [FRONTEND] JSON解析错误:', e)
+            console.error('❌ [FRONTEND] 原始消息:', message)
+            console.error('❌ [FRONTEND] 当前缓冲区:', buffer)
           }
 
           return readChunk()
         })
       }
       return readChunk()
+    }).catch((error) => {
+      console.error('❌ [FRONTEND] 网络请求失败:', error)
+      updateLastReceivedMessage('网络连接错误：' + error.message, cur_res_id)
     })
   } else {
-    console.log('Please enter a message')
+    console.log('⚠️ [FRONTEND] 消息为空，不发送')
   }
 }
 
