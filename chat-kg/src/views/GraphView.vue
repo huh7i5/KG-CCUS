@@ -30,7 +30,7 @@ const state = reactive({
 let myChart;
 
 const fetchWebkitDepData = () => {
-  axios.get('http://localhost:8000/graph/').then(response => response.data.data)
+  axios.get('/api/graph/').then(response => response.data.data)
     .then(webkitDep => {
       state.graph = webkitDep
       myChart.hideLoading()

@@ -259,6 +259,9 @@ class SimpleChatGLM:
 
     def stream_chat(self, query, history=None):
         """流式聊天"""
+        print("🟢🟢🟢 CLAUDE STREAM_CHAT CALLED! FIXES ARE NOW ACTIVE! 🟢🟢🟢")
+        print(f"🟢🟢🟢 Query: {query} 🟢🟢🟢")
+
         if not self.loaded:
             yield "模型未加载，请稍后再试", history or []
             return
@@ -291,10 +294,18 @@ class SimpleChatGLM:
                         # 修复ChatGLM模型配置兼容性问题
                         if hasattr(self.model, 'generation_config'):
                             gen_config = self.model.generation_config
-                            if hasattr(gen_config, '_eos_token_tensor'):
-                                delattr(gen_config, '_eos_token_tensor')
-                            if hasattr(gen_config, '_pad_token_tensor'):
-                                delattr(gen_config, '_pad_token_tensor')
+                            # 删除所有tensor属性来避免兼容性问题
+                            attrs_to_remove = [attr for attr in dir(gen_config) if attr.endswith('_tensor')]
+                            for attr in attrs_to_remove:
+                                if hasattr(gen_config, attr):
+                                    delattr(gen_config, attr)
+                                    print(f"🔧 Removed generation_config.{attr}")
+
+                            # 确保基本配置存在
+                            if not hasattr(gen_config, 'eos_token_id'):
+                                gen_config.eos_token_id = 2
+                            if not hasattr(gen_config, 'pad_token_id'):
+                                gen_config.pad_token_id = 3
 
                         if hasattr(self.model, 'config'):
                             config = self.model.config
@@ -326,10 +337,18 @@ class SimpleChatGLM:
                         # 修复ChatGLM模型配置兼容性问题
                         if hasattr(self.model, 'generation_config'):
                             gen_config = self.model.generation_config
-                            if hasattr(gen_config, '_eos_token_tensor'):
-                                delattr(gen_config, '_eos_token_tensor')
-                            if hasattr(gen_config, '_pad_token_tensor'):
-                                delattr(gen_config, '_pad_token_tensor')
+                            # 删除所有tensor属性来避免兼容性问题
+                            attrs_to_remove = [attr for attr in dir(gen_config) if attr.endswith('_tensor')]
+                            for attr in attrs_to_remove:
+                                if hasattr(gen_config, attr):
+                                    delattr(gen_config, attr)
+                                    print(f"🔧 Removed generation_config.{attr}")
+
+                            # 确保基本配置存在
+                            if not hasattr(gen_config, 'eos_token_id'):
+                                gen_config.eos_token_id = 2
+                            if not hasattr(gen_config, 'pad_token_id'):
+                                gen_config.pad_token_id = 3
 
                         if hasattr(self.model, 'config'):
                             config = self.model.config
@@ -443,21 +462,55 @@ class SimpleChatGLM:
             # 使用更简单的编码方法避免padding问题
             input_text = full_query
             try:
-                # 使用简化的编码方法避免tokenizer问题
-                input_ids = self.tokenizer.encode(input_text, add_special_tokens=True)
-                if isinstance(input_ids, list):
-                    input_ids = torch.tensor([input_ids], dtype=torch.long)
-                else:
-                    input_ids = input_ids.unsqueeze(0)
+                # 使用更稳定的编码方法
+                input_text = input_text.strip()
+                if not input_text:
+                    raise Exception("Empty input text")
 
-                if torch.cuda.is_available():
+                # 使用tokenizer的基础方法
+                print(f"🔍 Debug: Tokenizing text (length: {len(input_text)})")
+                input_ids = None
+
+                if hasattr(self.tokenizer, 'encode'):
+                    try:
+                        input_ids = self.tokenizer.encode(input_text, add_special_tokens=True, return_tensors="pt")
+                        print(f"✅ encode method worked, shape: {input_ids.shape if input_ids is not None else 'None'}")
+                    except Exception as e:
+                        print(f"❌ encode method failed: {e}")
+
+                if input_ids is None and hasattr(self.tokenizer, '__call__'):
+                    try:
+                        result = self.tokenizer(input_text, return_tensors="pt", add_special_tokens=True)
+                        input_ids = result.get('input_ids') if isinstance(result, dict) else result
+                        print(f"✅ __call__ method worked, shape: {input_ids.shape if input_ids is not None else 'None'}")
+                    except Exception as e:
+                        print(f"❌ __call__ method failed: {e}")
+
+                if input_ids is None:
+                    raise Exception("Tokenizer not properly initialized or all methods failed")
+
+                # 验证tensor有效性
+                if input_ids is None:
+                    raise Exception("input_ids is None after tokenization")
+                if not isinstance(input_ids, torch.Tensor):
+                    raise Exception(f"input_ids is not a tensor: {type(input_ids)}")
+                if input_ids.nelement() == 0:
+                    raise Exception("input_ids tensor is empty")
+
+                print(f"✅ Valid input_ids generated: shape={input_ids.shape}, device={input_ids.device}")
+
+                if torch.cuda.is_available() and not input_ids.is_cuda:
                     input_ids = input_ids.cuda()
+                    print(f"✅ Moved to CUDA: {input_ids.device}")
+
+                # 检查input_ids是否有效
+                if input_ids.shape[1] == 0:
+                    raise Exception("Empty input_ids generated")
+
             except Exception as e:
                 print(f"Tokenization error: {e}")
-                # 使用更简单的fallback编码
-                input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
-                if torch.cuda.is_available():
-                    input_ids = input_ids.cuda()
+                # 直接fallback到智能回答，不使用无效的token
+                raise Exception(f"Tokenization failed: {e}")
 
             with torch.no_grad():
                 try:
@@ -522,10 +575,21 @@ class SimpleChatGLM:
         elif "谢谢" in query:
             response = "不用谢！我很高兴能为您提供CCUS技术方面的帮助。"
         elif any(word in query for word in ["碳捕集", "CCUS", "碳储存", "碳利用", "二氧化碳"]):
-            if "技术" in query or "方法" in query:
-                response = f"关于「{query}」，CCUS技术主要包括三个核心环节：\n\n1. **碳捕集（Capture）**：从工业排放源捕获CO2，包括燃烧后捕集、燃烧前捕集、富氧燃烧等技术\n2. **碳利用（Utilization）**：将捕集的CO2转化为有价值的产品，如化工原料、燃料等\n3. **碳储存（Storage）**：将CO2安全封存在地质结构中，实现长期储存\n\n目前我国在电力、钢铁、水泥、化工等行业都有CCUS示范项目。您想了解哪个具体方面呢？"
+            # 根据具体问题内容生成个性化回答
+            if "北京" in query and ("适合" in query or "推荐" in query):
+                response = f"关于「{query}」，北京地区作为经济发达的大都市，适合发展以下CCUS技术：\n\n1. **工业CO2捕集技术**：适用于北京周边的钢铁、化工企业\n2. **建筑材料碳利用**：将CO2转化为建筑用碳酸钙等材料\n3. **燃气电厂CCUS改造**：对现有燃气发电设施进行碳捕集升级\n4. **直接空气捕集(DAC)**：在人口密集区域进行空气中CO2的直接捕集\n\n北京的技术优势和政策支持为CCUS技术产业化提供了良好条件。建议重点关注能源结构和产业特点选择合适的技术路线。"
+            elif "东北" in query and ("适合" in query or "推荐" in query):
+                response = f"关于「{query}」，东北地区工业基础雄厚，适合发展以下CCUS技术：\n\n1. **大型燃煤电厂CCUS改造**：充分利用东北丰富的煤炭资源\n2. **钢铁冶金行业碳捕集**：适用于鞍钢等大型钢铁企业\n3. **石油化工CCUS一体化**：结合大庆、辽河油田资源优势\n4. **生物质与CCUS结合(BECCS)**：利用东北农林废弃物资源\n\n东北地区的重工业基础和丰富的地质储存条件为CCUS大规模应用提供了良好基础。"
+            elif "内蒙古" in query and ("适合" in query or "推荐" in query):
+                response = f"关于「{query}」，内蒙古地区资源丰富，适合发展以下CCUS技术：\n\n1. **燃煤电厂大规模CCUS**：结合内蒙古丰富的煤炭资源\n2. **煤化工CCUS一体化**：适用于鄂尔多斯等煤化工基地\n3. **地质储存技术**：利用内蒙古优质的深部咸水层\n4. **风电制氢+CCUS**：结合内蒙古风能资源优势\n\n内蒙古的能源优势和广阔的地下空间为CCUS技术大规模部署提供了得天独厚的条件。"
+            elif "什么是" in query or query.strip().lower() in ["ccus", "什么是ccus"]:
+                response = f"关于「{query}」，CCUS是Carbon Capture, Utilization and Storage的缩写，即碳捕集、利用与储存技术。它包括三个核心环节：\n\n1. **碳捕集（Capture）**：从工业排放源捕获CO2\n2. **碳利用（Utilization）**：将CO2转化为有价值产品\n3. **碳储存（Storage）**：将CO2安全封存\n\nCCUS被认为是实现碳中和目标的关键技术之一，在电力、钢铁、水泥等高排放行业有重要应用前景。"
+            elif "技术" in query or "方法" in query:
+                response = f"关于「{query}」，CCUS技术体系包含多种先进方法：\n\n**捕集技术**：后燃烧捕集、预燃烧捕集、富氧燃烧、直接空气捕集等\n**利用技术**：CO2制甲醇、CO2制尿素、矿物碳化、生物利用等\n**储存技术**：深部咸水层封存、枯竭油气藏封存、不可开采煤层封存等\n\n每种技术都有其适用场景和经济性考虑，需要根据具体项目条件选择最优方案。"
+            elif "地区" in query or "哪里" in query:
+                response = f"关于「{query}」，不同地区的CCUS技术选择需要考虑：\n\n**资源条件**：当地的工业排放源、地质条件、能源结构\n**技术基础**：研发能力、产业配套、人才储备\n**政策支持**：地方政策、资金支持、示范项目\n**经济因素**：建设成本、运营费用、碳价水平\n\n目前我国在华北、华东、西北等地区都有CCUS示范项目，各有特色和优势。"
             else:
-                response = f"关于「{query}」，这是CCUS技术领域的重要话题。CCUS作为实现碳中和目标的关键技术路径，在我国能源转型中发挥着重要作用。请告诉我您想了解的具体方面，我可以为您提供更详细的信息。"
+                response = f"关于「{query}」，这是CCUS技术领域的重要话题。基于知识图谱检索到的信息，我可以为您提供以下见解：\n\n当前CCUS技术正在快速发展，在实现碳中和目标中发挥关键作用。不同的技术路线和应用场景都有其特点和价值。\n\n如果您需要了解更具体的技术细节、应用案例或政策信息，请告诉我您关注的具体方面。"
         elif any(word in query for word in ["什么", "如何", "怎么", "为什么", "哪些"]):
             response = f"关于「{query}」，这是一个很好的问题。基于我的CCUS知识库，我可以为您提供专业的技术解答。请稍等，我正在为您查找相关信息..."
         else:

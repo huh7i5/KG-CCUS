@@ -29,7 +29,9 @@ def clean_text_for_json(text):
     return text
 
 def search_node_item(user_input, lite_graph=None):
+    """CCUS领域知识图谱检索功能"""
     import os
+
     # 确保正确的数据文件路径
     current_dir = os.path.dirname(os.path.abspath(__file__))
     data_path = os.path.join(current_dir, '..', '..', 'data', 'data.json')
@@ -37,8 +39,12 @@ def search_node_item(user_input, lite_graph=None):
     try:
         with open(data_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
+        print(f"📊 Loaded knowledge graph with {len(data.get('nodes', []))} nodes and {len(data.get('links', []))} edges")
     except FileNotFoundError:
-        print(f"Warning: data.json not found at {data_path}")
+        print(f"⚠️  CCUS knowledge graph not found at {data_path}")
+        return None
+    except json.JSONDecodeError:
+        print(f"❌ Invalid JSON format in {data_path}")
         return None
 
     if lite_graph is None:
@@ -48,50 +54,149 @@ def search_node_item(user_input, lite_graph=None):
             'sents': []
         }
 
-    # 利用thefuzz库来选取最相近的节点
-    # node_names = [node['name'] for node in data['nodes']]
-    # user_input = process.extractOne(user_input, node_names)[0]
+    # CCUS领域优化的搜索策略
+    SEARCH_DEPTH = 2  # 增加搜索深度以获取更多相关信息
 
-    DEEP = 1
+    # 初始搜索节点
+    search_terms = [user_input]
 
-    # search node
-    search_nodes = [user_input]
-    for d in range(DEEP):
-        for serch_node in search_nodes:
-            for edge in data['links']:
-                source = data['nodes'][int(edge['source'])]
-                target = data['nodes'][int(edge['target'])]
-                if source['name'] in serch_node or serch_node in source['name'] or target['name'] in serch_node or serch_node in target['name']:
-                # if source['name'] == serch_node or target['name'] == serch_node:
-                    sent = data['sents'][str(edge['sent'])]
-                    if sent not in lite_graph['sents']:
-                        edge['sent'] = len(lite_graph['sents'])
-                        lite_graph['sents'].append(sent)
-                    else:
-                        edge['sent'] = lite_graph['sents'].index(sent)
+    # 添加CCUS相关的同义词扩展
+    ccus_synonyms = {
+        'ccus': ['碳捕集利用与储存', '碳捕集', '碳储存', '碳利用'],
+        'ccs': ['碳捕集与储存', '碳封存'],
+        'ccu': ['碳捕集与利用', '碳转化'],
+        '二氧化碳': ['co2', 'CO₂', '温室气体'],
+        '捕集': ['捕获', '分离', '收集'],
+        '储存': ['封存', '储藏', '地质储存'],
+        '利用': ['转化', '应用', '资源化']
+    }
 
-                    if source not in lite_graph['nodes']:
-                        source['id'] = len(lite_graph['nodes'])
-                        lite_graph['nodes'].append(source)
-                    else:
-                        source['id'] = lite_graph['nodes'].index(source)
+    user_lower = user_input.lower()
+    for key, synonyms in ccus_synonyms.items():
+        if key in user_lower:
+            search_terms.extend(synonyms)
 
-                    if target not in lite_graph['nodes']:
-                        target['id'] = len(lite_graph['nodes'])
-                        lite_graph['nodes'].append(target)
-                    else:
-                        target['id'] = lite_graph['nodes'].index(target)
+    print(f"🔍 CCUS graph search for: {user_input}")
+    print(f"📝 Extended search terms: {search_terms}")
 
-                    edge['source'] = source['id']
-                    edge['target'] = target['id']
-                    lite_graph['links'].append(edge)
+    found_nodes = set()
+
+    for depth in range(SEARCH_DEPTH):
+        new_search_terms = []
+
+        for search_term in search_terms:
+            for edge in data.get('links', []):
+                try:
+                    source_idx = int(edge['source'])
+                    target_idx = int(edge['target'])
+
+                    if source_idx >= len(data['nodes']) or target_idx >= len(data['nodes']):
+                        continue
+
+                    source = data['nodes'][source_idx].copy()
+                    target = data['nodes'][target_idx].copy()
+
+                    # 改进的匹配策略
+                    source_match = _is_ccus_match(search_term, source['name'])
+                    target_match = _is_ccus_match(search_term, target['name'])
+
+                    if source_match or target_match:
+                        # 添加句子信息
+                        sent_key = str(edge.get('sent', ''))
+                        if sent_key in data.get('sents', {}):
+                            sent = data['sents'][sent_key]
+                            if sent not in lite_graph['sents']:
+                                edge_copy = edge.copy()
+                                edge_copy['sent'] = len(lite_graph['sents'])
+                                lite_graph['sents'].append(sent)
+                            else:
+                                edge_copy = edge.copy()
+                                edge_copy['sent'] = lite_graph['sents'].index(sent)
+                        else:
+                            edge_copy = edge.copy()
+                            edge_copy['sent'] = -1
+
+                        # 添加节点
+                        source_id = _add_node_to_graph(source, lite_graph)
+                        target_id = _add_node_to_graph(target, lite_graph)
+
+                        # 添加边
+                        edge_copy['source'] = source_id
+                        edge_copy['target'] = target_id
+
+                        # 避免重复边
+                        edge_exists = any(
+                            link['source'] == edge_copy['source'] and
+                            link['target'] == edge_copy['target'] and
+                            link.get('name', '') == edge_copy.get('name', '')
+                            for link in lite_graph['links']
+                        )
+
+                        if not edge_exists:
+                            lite_graph['links'].append(edge_copy)
+
+                        # 收集相关节点用于下一轮搜索
+                        found_nodes.add(source['name'])
+                        found_nodes.add(target['name'])
+
+                except (KeyError, IndexError, ValueError) as e:
+                    continue
+
+        if depth < SEARCH_DEPTH - 1:
+            # 准备下一轮搜索的节点
+            search_terms = list(found_nodes)[:10]  # 限制搜索节点数量
 
         if len(lite_graph['nodes']) == 0:
             break
 
-        search_nodes = [node['name'] for node in lite_graph['nodes']]
+    print(f"✅ CCUS graph search complete: {len(lite_graph['nodes'])} nodes, {len(lite_graph['links'])} edges")
+    return lite_graph if len(lite_graph['nodes']) > 0 else None
 
-    return lite_graph
+def _is_ccus_match(search_term, node_name):
+    """CCUS领域的智能匹配策略"""
+    if not search_term or not node_name:
+        return False
+
+    search_lower = search_term.lower().strip()
+    node_lower = node_name.lower().strip()
+
+    # 1. 精确匹配
+    if search_lower == node_lower:
+        return True
+
+    # 2. 包含匹配
+    if search_lower in node_lower or node_lower in search_lower:
+        return True
+
+    # 3. CCUS特殊匹配规则
+    ccus_mappings = {
+        'ccus': ['碳捕集利用与储存', '碳捕集', '二氧化碳'],
+        'co2': ['二氧化碳', '温室气体', '碳'],
+        '捕集': ['capture', '分离', '收集'],
+        '储存': ['storage', '封存', '储藏'],
+        '利用': ['utilization', '转化', '应用']
+    }
+
+    for key, values in ccus_mappings.items():
+        if key in search_lower:
+            if any(v in node_lower for v in values):
+                return True
+        if any(v in search_lower for v in values):
+            if key in node_lower:
+                return True
+
+    return False
+
+def _add_node_to_graph(node, lite_graph):
+    """添加节点到图谱中，避免重复"""
+    for i, existing_node in enumerate(lite_graph['nodes']):
+        if existing_node['name'] == node['name']:
+            return i
+
+    node_copy = node.copy()
+    node_copy['id'] = len(lite_graph['nodes'])
+    lite_graph['nodes'].append(node_copy)
+    return node_copy['id']
 
 
 def convert_graph_to_triples(graph, entity=None):

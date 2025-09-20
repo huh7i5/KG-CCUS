@@ -14,7 +14,15 @@ def chat_get():
 
 @mod.route('/', methods=['POST'])
 def chat():
-    print("🌐 [BACKEND] ================== 新的聊天请求 ==================")
+    print("🚨🚨🚨 CLAUDE DEBUG: CHAT REQUEST RECEIVED 🚨🚨🚨")
+    print("🚨🚨🚨 CLAUDE DEBUG: CHAT REQUEST RECEIVED 🚨🚨🚨")
+    print("🚨🚨🚨 CLAUDE DEBUG: CHAT REQUEST RECEIVED 🚨🚨🚨")
+    print(f"Request method: {request.method}")
+    print(f"Request path: {request.path}")
+    print(f"Request URL: {request.url}")
+    print(f"Request data length: {len(request.data) if request.data else 0}")
+
+    # 现在我知道代码确实被加载了
 
     try:
         # 解析请求数据

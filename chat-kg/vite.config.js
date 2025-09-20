@@ -14,7 +14,7 @@ export default defineConfig({
   // 定义代理和服务器配置
   server: {
     host: '0.0.0.0', // 允许外部访问
-    port: 5174,
+    port: 5175,
     proxy: {
       '^/api': {
         target: 'http://localhost:5000',
@@ -22,5 +22,10 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api/, '')
       }
     },
+  },
+  // AutoDL优化配置
+  define: {
+    __VUE_PROD_DEVTOOLS__: false,
+    __VUE_OPTIONS_API__: true
   }
 })
