@@ -199,14 +199,66 @@ class KnowledgeGraphQA:
         return prompt
 
     def generate_response(self, prompt, history, chat_glm_model=None):
-        """步骤6: 对话语言模型生成回答"""
-        if chat_glm_model and chat_glm_model.loaded:
-            # 使用ChatGLM模型
-            for response, updated_history in chat_glm_model.stream_chat(prompt, history):
-                # 清理响应中的prompt内容
-                cleaned_response = self._clean_response(response)
-                yield cleaned_response, updated_history
+        """步骤6: 对话语言模型生成回答 - 使用SimpleChatGLM"""
+        global chat_glm
+
+        print("🤖 [CHATGLM] === 开始生成回答 ===")
+        print(f"🤖 [CHATGLM] 是否有SimpleChatGLM: {chat_glm is not None}")
+
+        # 使用SimpleChatGLM实例
+        if chat_glm is not None and chat_glm.loaded:
+            print("🤖 [CHATGLM] 使用SimpleChatGLM调用方式")
+            print(f"🤖 [CHATGLM] Prompt长度: {len(prompt)} 字符")
+            print(f"🤖 [CHATGLM] Prompt预览: {prompt[:200]}...")
+            print(f"🤖 [CHATGLM] History长度: {len(history)}")
+
+            try:
+                # 将知识图谱格式的prompt转换为用户问题
+                if prompt.startswith("基于以下知识信息回答用户问题"):
+                    # 提取用户问题
+                    lines = prompt.split('\n')
+                    user_question = ""
+                    for line in lines:
+                        if line.startswith("用户问题:"):
+                            user_question = line.replace("用户问题:", "").strip()
+                            break
+
+                    if user_question:
+                        chat_input = user_question
+                    else:
+                        chat_input = prompt
+                else:
+                    chat_input = prompt
+
+                print(f"🤖 [CHATGLM] 转换后的chat_input: {chat_input[:200]}...")
+
+                response_count = 0
+                # 使用SimpleChatGLM的stream_chat方法
+                for response, updated_history in chat_glm.stream_chat(chat_input, history):
+                    response_count += 1
+                    print(f"🤖 [CHATGLM] 第{response_count}个SimpleChatGLM响应:")
+                    print(f"🤖 [CHATGLM] 响应长度: {len(response)}")
+                    print(f"🤖 [CHATGLM] 响应预览: {response[:150]}...")
+
+                    # 检查是否是真正的ChatGLM智能回答
+                    if response and len(response.strip()) > 20:
+                        print(f"✅ [CHATGLM] 确认收到ChatGLM智能回复!")
+
+                    yield response, updated_history
+
+                if response_count == 0:
+                    print("❌ [CHATGLM] SimpleChatGLM未产生任何响应")
+
+            except Exception as e:
+                print(f"❌ [CHATGLM] SimpleChatGLM调用异常: {e}")
+                import traceback
+                traceback.print_exc()
+                # 降级到简单模式
+                response = self._generate_simple_response(prompt)
+                updated_history = history + [(prompt, response)]
+                yield response, updated_history
         else:
+            print("⚠️ [CHATGLM] SimpleChatGLM未加载，使用简单模式回答")
             # 简单模式回答
             response = self._generate_simple_response(prompt)
             updated_history = history + [(prompt, response)]
@@ -234,6 +286,25 @@ class KnowledgeGraphQA:
 
         return cleaned if len(cleaned.strip()) > 10 else response
 
+    def _is_chatglm_response(self, response):
+        """检查是否是真正的ChatGLM智能响应"""
+        if not response or len(response.strip()) < 10:
+            return False
+
+        # 检查是否包含模板响应指标
+        template_indicators = [
+            "CCUS是碳捕集、利用与储存技术",
+            "是应对气候变化的重要技术手段",
+            "根据知识图谱信息",
+            "我为您提供相关的CCUS技术领域回答"
+        ]
+
+        is_template = any(indicator in response for indicator in template_indicators)
+        is_longer_than_template = len(response) > 100
+        has_detailed_content = any(keyword in response for keyword in ["具体", "详细", "例如", "包括", "主要"])
+
+        return not is_template and (is_longer_than_template or has_detailed_content)
+
     def _generate_simple_response(self, prompt):
         """生成简单回答（当没有ChatGLM模型时）"""
         if "ccus" in prompt.lower() or "碳捕集" in prompt or "二氧化碳" in prompt:
@@ -255,29 +326,51 @@ def predict(user_input, history=None):
 def stream_predict(user_input, history=None):
     """主要的流式预测函数 - 按照流程图实现"""
     global model, tokenizer, init_history, chat_glm
+
+    print("🚀 [STREAM_PREDICT] === 开始流式预测 ===")
+    print(f"🚀 [STREAM_PREDICT] 用户输入: {user_input}")
+    print(f"🚀 [STREAM_PREDICT] 全局ChatGLM实例: {chat_glm is not None}")
+
     if not history:
         history = init_history or []
 
+    print(f"🚀 [STREAM_PREDICT] 历史记录长度: {len(history)}")
+
     # 步骤1: 命名实体识别
+    print("📝 [STREAM_PREDICT] 步骤1: 命名实体识别")
     entities = kg_qa_system.named_entity_recognition(user_input)
+    print(f"📝 [STREAM_PREDICT] 识别实体: {entities}")
 
     # 步骤2: 图谱检索
+    print("🔍 [STREAM_PREDICT] 步骤2: 图谱检索")
     graph_results = kg_qa_system.graph_search(entities)
+    print(f"🔍 [STREAM_PREDICT] 图谱结果: 节点数={len(graph_results['full_graph'].get('nodes', []))} 三元组数={len(graph_results['triples'])}")
 
     # 步骤3: 外部知识检索
+    print("🌐 [STREAM_PREDICT] 步骤3: 外部知识检索")
     external_knowledge = kg_qa_system.external_knowledge_search(entities, user_input)
+    print(f"🌐 [STREAM_PREDICT] Wiki标题: {external_knowledge['wiki']['title']}")
 
     # 步骤4: 结构化处理
+    print("🔧 [STREAM_PREDICT] 步骤4: 结构化处理")
     structured_info = kg_qa_system.structured_processing(graph_results, external_knowledge, entities)
+    print(f"🔧 [STREAM_PREDICT] 关系数: {len(structured_info['relations'])} 知识文本长度: {len(structured_info['knowledge_text'])}")
 
     # 步骤5: 构建prompt
+    print("📋 [STREAM_PREDICT] 步骤5: 构建prompt")
     prompt = kg_qa_system.build_prompt(user_input, structured_info)
+    print(f"📋 [STREAM_PREDICT] Prompt长度: {len(prompt)} 字符")
 
     # 更新上下文管理器
     context_manager.update_context(user_input, entities, graph_results['full_graph'])
 
     # 步骤6: 对话语言模型生成回答
-    for response, updated_history in kg_qa_system.generate_response(prompt, history, chat_glm):
+    print("🤖 [STREAM_PREDICT] 步骤6: 调用ChatGLM生成回答")
+    response_count = 0
+    for response, updated_history in kg_qa_system.generate_response(prompt, history, None):
+        response_count += 1
+        print(f"📤 [STREAM_PREDICT] 生成第{response_count}个响应")
+
         # 构建返回结果
         result = {
             "history": updated_history,
@@ -289,46 +382,70 @@ def stream_predict(user_input, history=None):
             "graph": graph_results['full_graph'] if graph_results['full_graph'] and len(graph_results['full_graph'].get('nodes', [])) <= 50 else None,
             "wiki": external_knowledge['wiki']
         }
-        yield json.dumps(result, ensure_ascii=False).encode('utf8') + b'\n'
+
+        json_result = json.dumps(result, ensure_ascii=False).encode('utf8') + b'\n'
+        print(f"📤 [STREAM_PREDICT] 返回结果大小: {len(json_result)} bytes")
+        yield json_result
+
+    print(f"✅ [STREAM_PREDICT] 流式预测完成，总共生成{response_count}个响应")
 
 def start_model():
-    """加载模型"""
+    """加载模型 - 使用SimpleChatGLM实现"""
     global model, tokenizer, init_history, chat_glm
 
-    print("🚀 Starting CCUS Knowledge Graph QA System...")
+    print("🚀 [START_MODEL] === 开始加载ChatGLM模型（使用SimpleChatGLM）===")
 
-    # 检查模型路径
-    model_path = "/fast/zwj/ChatGLM-6B/weights"
+    try:
+        from app.utils.simple_chat import SimpleChatGLM
 
-    if os.path.exists(model_path) and os.listdir(model_path):
-        try:
-            from app.utils.simple_chat import SimpleChatGLM
+        model_path = "/fast/zwj/ChatGLM-6B/weights"
+        print(f"📁 [START_MODEL] 模型路径: {model_path}")
 
-            print(f"📁 Loading ChatGLM model from: {model_path}")
-            chat_glm = SimpleChatGLM(model_path, memory_optimize=True)
+        # 创建SimpleChatGLM实例
+        print("🔄 [START_MODEL] 创建SimpleChatGLM实例...")
+        chat_glm = SimpleChatGLM(model_path, memory_optimize=True)
 
-            if chat_glm.load_model():
-                model = chat_glm.model
-                tokenizer = chat_glm.tokenizer
+        # 加载模型
+        print("🔄 [START_MODEL] 加载ChatGLM模型...")
+        if chat_glm.load_model():
+            print("✅ [START_MODEL] SimpleChatGLM加载成功!")
+
+            # 获取内部模型和分词器用于兼容性
+            model = chat_glm.model
+            tokenizer = chat_glm.tokenizer
+
+            # 初始化历史记录
+            print("🔄 [START_MODEL] 初始化历史记录...")
+            pre_prompt = "你叫 ChatKG，是一个图谱问答机器人，此为背景。下面开始聊天吧！"
+            try:
+                # 使用SimpleChatGLM的stream_chat来初始化
+                for response, history in chat_glm.stream_chat(pre_prompt, []):
+                    init_history = history
+                    break
+                print("✅ [START_MODEL] 历史记录初始化完成!")
+            except Exception as e:
+                print(f"⚠️ [START_MODEL] 历史记录初始化失败，使用空历史: {e}")
                 init_history = []
-                print("✅ ChatGLM-6B loaded successfully!")
-            else:
-                print("❌ Failed to load ChatGLM-6B")
-                model = None
-                tokenizer = None
-                init_history = []
-                chat_glm = None
-        except Exception as e:
-            print(f"❌ Error loading ChatGLM: {e}")
+
+            print(f"🎯 [START_MODEL] ChatGLM-6B加载完成!")
+            print(f"🎯 [START_MODEL] 模型类型: {type(model)}")
+            print(f"🎯 [START_MODEL] 分词器类型: {type(tokenizer)}")
+            print(f"🎯 [START_MODEL] 初始历史长度: {len(init_history)}")
+
+        else:
+            print("❌ [START_MODEL] SimpleChatGLM加载失败")
             model = None
             tokenizer = None
             init_history = []
             chat_glm = None
-    else:
-        print("⚠️  ChatGLM model not found, using simple response mode")
+
+    except Exception as e:
+        print(f"❌ [START_MODEL] 模型加载失败: {e}")
+        import traceback
+        traceback.print_exc()
         model = None
         tokenizer = None
         init_history = []
         chat_glm = None
 
-    print("🎯 CCUS Knowledge Graph QA System ready!")
+    print("🎯 [START_MODEL] 模型加载流程完成!")

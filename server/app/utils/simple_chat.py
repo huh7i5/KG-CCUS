@@ -215,36 +215,56 @@ class SimpleChatGLM:
 
     def stream_chat(self, query, history=None):
         """流式聊天"""
-        print(f"🚀 Stream chat called with query: {query[:50]}...")
+        print("🎯 [SimpleChatGLM] === stream_chat开始 ===")
+        print(f"🎯 [SimpleChatGLM] 查询: {query[:100]}...")
+        print(f"🎯 [SimpleChatGLM] 模型加载状态: {self.loaded}")
+        print(f"🎯 [SimpleChatGLM] 历史记录长度: {len(history) if history else 0}")
+        print(f"🎯 [SimpleChatGLM] 模型对象存在: {self.model is not None}")
+        print(f"🎯 [SimpleChatGLM] 分词器存在: {self.tokenizer is not None}")
 
         if not self.loaded:
+            print("⚠️ [SimpleChatGLM] 模型未加载，返回默认响应")
             yield "模型未加载，请稍后再试", history or []
             return
 
         try:
             # 如果有真实模型，尝试使用
             if self.model is not None:
-                print("✅ Using actual ChatGLM model")
+                print("✅ [SimpleChatGLM] 使用真实ChatGLM模型")
 
                 # 修复tokenizer兼容性问题
+                print("🔧 [SimpleChatGLM] 修复tokenizer兼容性...")
                 self._fix_tokenizer_compatibility()
 
                 # 智能重试机制：根据错误类型决定重试策略
+                print("🔄 [SimpleChatGLM] 开始智能重试机制...")
                 chatglm_success = self._try_chatglm_with_retry(query, history or [])
+
                 if chatglm_success:
+                    print("✅ [SimpleChatGLM] ChatGLM重试成功，返回结果")
+                    response_count = 0
                     for response, new_history in chatglm_success:
+                        response_count += 1
+                        print(f"📤 [SimpleChatGLM] 返回第{response_count}个ChatGLM响应: {response[:100]}...")
                         yield response, new_history
                     return
+                else:
+                    print("❌ [SimpleChatGLM] ChatGLM重试完全失败")
 
                 # 如果ChatGLM完全失败，提供智能回答而不是简单模板
-                print("⚠️ ChatGLM unavailable, providing knowledge-enhanced response")
+                print("⚠️ [SimpleChatGLM] ChatGLM不可用，提供增强型回退响应")
                 enhanced_response = self._generate_enhanced_fallback_response(query, history or [])
+                print(f"📤 [SimpleChatGLM] 返回增强回退响应: {enhanced_response[:100]}...")
                 yield enhanced_response, (history or []) + [(query, enhanced_response)]
                 return
+            else:
+                print("❌ [SimpleChatGLM] 无真实模型，使用模板响应模式")
 
             # 使用模板响应模式
+            print("🔧 [SimpleChatGLM] 使用模板响应模式")
             response = self._generate_smart_answer(query)
             new_history = (history or []) + [(query, response)]
+            print(f"📤 [SimpleChatGLM] 返回模板响应: {response[:100]}...")
             yield response, new_history
 
         except Exception as e:
@@ -276,8 +296,37 @@ class SimpleChatGLM:
         except Exception as e:
             print(f"⚠️ Failed to fix tokenizer compatibility: {e}")
 
+    def _fix_chatglm_config(self):
+        """修复ChatGLMConfig缺少的属性"""
+        try:
+            if self.model and hasattr(self.model, 'config'):
+                config = self.model.config
+
+                # 添加缺少的num_hidden_layers属性
+                if not hasattr(config, 'num_hidden_layers'):
+                    # ChatGLM-6B通常有28层
+                    if hasattr(config, 'num_layers'):
+                        config.num_hidden_layers = config.num_layers
+                        print(f"🔧 [Config修复] 添加num_hidden_layers: {config.num_hidden_layers}")
+                    else:
+                        config.num_hidden_layers = 28  # ChatGLM-6B默认值
+                        print(f"🔧 [Config修复] 设置默认num_hidden_layers: 28")
+
+                # 添加其他可能缺少的属性
+                if not hasattr(config, 'num_attention_heads'):
+                    config.num_attention_heads = getattr(config, 'multi_query_attention', 32)
+                    print(f"🔧 [Config修复] 添加num_attention_heads: {config.num_attention_heads}")
+
+                if not hasattr(config, 'hidden_size'):
+                    config.hidden_size = getattr(config, 'hidden_size', 4096)
+                    print(f"🔧 [Config修复] 确认hidden_size: {config.hidden_size}")
+
+        except Exception as e:
+            print(f"⚠️ [Config修复] 修复ChatGLM配置失败: {e}")
+
     def _try_chatglm_with_retry(self, query, history):
         """智能重试机制：根据错误类型决定重试策略"""
+        print("🔄 [ChatGLM重试] === 开始智能重试机制 ===")
         methods = [
             ("stream_chat", self._try_stream_chat),
             ("chat", self._try_chat),
@@ -287,7 +336,7 @@ class SimpleChatGLM:
         last_error = None
         for attempt, (method_name, method_func) in enumerate(methods):
             try:
-                print(f"🔄 Attempt {attempt + 1}: Trying ChatGLM {method_name} method...")
+                print(f"🔄 [ChatGLM重试] 尝试第{attempt + 1}种方法: {method_name}")
 
                 # 对于generate方法，给更多的重试机会
                 max_retries = 3 if method_name == "generate" else 1
@@ -295,16 +344,22 @@ class SimpleChatGLM:
                 for retry in range(max_retries):
                     try:
                         if retry > 0:
-                            print(f"♻️ Retrying {method_name} (attempt {retry + 1}/{max_retries})...")
+                            print(f"♻️ [ChatGLM重试] 重试{method_name} (第{retry + 1}/{max_retries}次)...")
                             # 清理GPU内存，可能有助于解决内存问题
                             if torch.cuda.is_available():
                                 torch.cuda.empty_cache()
 
+                        print(f"🎯 [ChatGLM重试] 调用{method_name}方法...")
                         result = list(method_func(query, history))
+                        print(f"🎯 [ChatGLM重试] {method_name}返回结果数量: {len(result)}")
+
                         if result:
                             response, new_history = result[0]
+                            print(f"🎯 [ChatGLM重试] {method_name}响应长度: {len(response) if response else 0}")
+                            print(f"🎯 [ChatGLM重试] {method_name}响应预览: {response[:100] if response else 'None'}...")
+
                             if response and len(response.strip()) > 5:  # 确保回答有意义
-                                print(f"✅ ChatGLM {method_name} success (attempt {retry + 1}): {response[:50]}...")
+                                print(f"✅ [ChatGLM重试] {method_name}成功 (第{retry + 1}次尝试)")
                                 yield response, new_history
                                 return
 
@@ -365,29 +420,68 @@ class SimpleChatGLM:
 
     def _try_stream_chat(self, query, history):
         """尝试使用ChatGLM stream_chat方法"""
+        print("🎯 [_try_stream_chat] 开始尝试stream_chat方法")
+        print(f"🎯 [_try_stream_chat] 模型是否有stream_chat方法: {hasattr(self.model, 'stream_chat')}")
+
         if hasattr(self.model, 'stream_chat'):
-            for response, new_history in self.model.stream_chat(self.tokenizer, query, history):
-                yield response, new_history
+            print("🎯 [_try_stream_chat] 调用model.stream_chat...")
+            try:
+                response_count = 0
+                for response, new_history in self.model.stream_chat(self.tokenizer, query, history):
+                    response_count += 1
+                    print(f"🎯 [_try_stream_chat] 获得第{response_count}个stream_chat响应: {response[:100]}...")
+
+                    # 验证这是真正的ChatGLM生成内容
+                    if response and len(response.strip()) > 10 and not any(template in response for template in ["CCUS是碳捕集、利用与储存技术", "是应对气候变化的重要技术手段"]):
+                        print(f"✅ [_try_stream_chat] 检测到真正的ChatGLM智能回复!")
+
+                    yield response, new_history
+                print(f"🎯 [_try_stream_chat] stream_chat完成，总计{response_count}个响应")
+            except Exception as e:
+                print(f"❌ [_try_stream_chat] stream_chat调用失败: {e}")
+                raise e
         else:
+            print("❌ [_try_stream_chat] 模型没有stream_chat方法")
             raise Exception("Model does not have stream_chat method")
 
     def _try_chat(self, query, history):
         """尝试使用ChatGLM chat方法"""
+        print("🎯 [_try_chat] 开始尝试chat方法")
+        print(f"🎯 [_try_chat] 模型是否有chat方法: {hasattr(self.model, 'chat')}")
+
         if hasattr(self.model, 'chat'):
-            response, new_history = self.model.chat(self.tokenizer, query, history)
-            yield response, new_history
+            print("🎯 [_try_chat] 调用model.chat...")
+            try:
+                response, new_history = self.model.chat(self.tokenizer, query, history)
+                print(f"🎯 [_try_chat] 获得chat响应: {response[:100]}...")
+
+                # 验证这是真正的ChatGLM生成内容
+                if response and len(response.strip()) > 10 and not any(template in response for template in ["CCUS是碳捕集、利用与储存技术", "是应对气候变化的重要技术手段"]):
+                    print(f"✅ [_try_chat] 检测到真正的ChatGLM智能回复!")
+
+                yield response, new_history
+            except Exception as e:
+                print(f"❌ [_try_chat] chat调用失败: {e}")
+                raise e
         else:
+            print("❌ [_try_chat] 模型没有chat方法")
             raise Exception("Model does not have chat method")
 
     def _try_generate(self, query, history):
         """尝试使用generate方法"""
+        print("🎯 [_try_generate] 开始尝试generate方法")
         response, new_history = self._safe_generate_response(query, history)
+        print(f"🎯 [_try_generate] 获得generate响应: {response[:100]}...")
         yield response, new_history
 
     def _safe_generate_response(self, query, history):
         """安全的模型生成响应方法"""
         try:
-            print(f"🔄 Preparing input for ChatGLM generation...")
+            print("🔄 [_safe_generate_response] 开始安全生成响应")
+            print(f"🔄 [_safe_generate_response] 查询: {query[:100]}...")
+
+            # 修复ChatGLMConfig缺少属性的问题
+            self._fix_chatglm_config()
 
             # 构建完整的对话上下文
             full_prompt = self._build_conversation_prompt(query, history)
@@ -411,28 +505,54 @@ class SimpleChatGLM:
 
             print(f"📊 Input shape: {input_ids.shape}")
 
-            # 优化的生成配置
+            # 安全的生成配置 - 避免缓存和attention问题
             generation_config = {
                 'input_ids': input_ids,
-                'max_length': min(input_ids.shape[1] + 512, 2048),  # 限制最大长度
-                'do_sample': True,
-                'temperature': 0.8,
-                'top_p': 0.9,
-                'repetition_penalty': 1.1,
+                'max_new_tokens': 100,  # 只用max_new_tokens，避免max_length问题
+                'do_sample': False,     # 使用贪心解码，避免采样问题
                 'pad_token_id': getattr(self.tokenizer, 'pad_token_id', 0),
                 'eos_token_id': getattr(self.tokenizer, 'eos_token_id', 2),
-                'bos_token_id': getattr(self.tokenizer, 'bos_token_id', 1)
+                'use_cache': False,     # 禁用缓存，避免past_key_values问题
+                'return_dict_in_generate': True,
+                'output_scores': False  # 不返回分数，简化输出
             }
 
-            print(f"🎯 Starting ChatGLM generation...")
+            print(f"🎯 [_safe_generate_response] 开始ChatGLM生成，输入token数: {input_ids.shape[1]}")
 
             # 生成响应
             with torch.no_grad():
-                outputs = self.model.generate(**generation_config)
+                try:
+                    outputs = self.model.generate(**generation_config)
+                    print("✅ [_safe_generate_response] ChatGLM生成成功")
+                except Exception as generate_error:
+                    print(f"❌ [_safe_generate_response] generate方法失败: {generate_error}")
+
+                    # 尝试最简化的生成配置
+                    print("🔄 [_safe_generate_response] 尝试最简化的生成配置...")
+                    simple_config = {
+                        'input_ids': input_ids,
+                        'max_new_tokens': 50,  # 更短的输出
+                        'do_sample': False,
+                        'use_cache': False,    # 禁用缓存
+                        'pad_token_id': getattr(self.tokenizer, 'pad_token_id', 0),
+                        'attention_mask': None  # 不使用attention_mask
+                    }
+                    outputs = self.model.generate(**simple_config)
+                    print("✅ [_safe_generate_response] 简化配置生成成功")
 
             # 解码响应（只取新生成的部分）
-            generated_ids = outputs[0][input_ids.shape[1]:]
+            if hasattr(outputs, 'sequences'):
+                # 如果返回dict格式
+                generated_ids = outputs.sequences[0][input_ids.shape[1]:]
+                print(f"📤 [_safe_generate_response] 使用dict格式解码")
+            else:
+                # 如果返回tensor格式
+                generated_ids = outputs[0][input_ids.shape[1]:]
+                print(f"📤 [_safe_generate_response] 使用tensor格式解码")
+
             response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            print(f"📤 [_safe_generate_response] 解码响应长度: {len(response)}")
+            print(f"📤 [_safe_generate_response] 响应预览: {response[:100]}...")
 
             # 清理响应
             response = self._clean_generated_response(response, query)
